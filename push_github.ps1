@@ -24,3 +24,4 @@ Write-Host "`n3. GitHubへプッシュ中 (origin main)..." -ForegroundColor Yel
 git push origin main
 
 Write-Host "`n>>> GitHubへの公開・更新が正常に完了しました！" -ForegroundColor Green
+

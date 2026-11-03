@@ -90,3 +90,4 @@ TextAnalysis/
 ├── tests/                  # 単体・結合テストスイート
 └── README.md               # 本ドキュメント
 ```
+
