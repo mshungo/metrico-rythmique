@@ -1,0 +1,31 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Agent & local workflow artifacts
+.agents/
+.claude/
+
+# Literature, PDFs, Zotero archives (GitHub 100MB limit & copyright safety)
+韻律・リズム・音声学_理論分析/
