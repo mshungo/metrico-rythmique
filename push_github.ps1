@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  GitHub (mshungo/TextAnalysis) 自動プッシュ" -ForegroundColor Cyan
+Write-Host "  GitHub (mshungo/metrico-rythmique) 自動プッシュ" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 Write-Host "`n1. ファイルのステージング中..." -ForegroundColor Yellow
