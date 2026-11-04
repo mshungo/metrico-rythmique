@@ -228,9 +228,33 @@ def compute_corpus_metrics(docs, unit_words_list=None, dierese=False):
     tense_total = sum(tenses.values())
     tense_share = {k: round(100 * v / tense_total, 2) for k, v in tenses.most_common()} if tense_total > 0 else {}
 
+    content_count = sum(pos[k] for k in ("NOUN", "VERB", "ADJ", "ADV", "PROPN"))
+    function_count = sum(pos[k] for k in ("DET", "PRON", "ADP", "CCONJ", "SCONJ", "AUX"))
+    noun_count = pos.get("NOUN", 0) + pos.get("PROPN", 0)
+    verb_count = pos.get("VERB", 0) + pos.get("AUX", 0)
+    nominal_ratio = round(noun_count / max(verb_count, 1), 2)
+    lexical_density = round(100.0 * content_count / max(W, 1), 1)
+    if nominal_ratio >= 1.5:
+        style_desc = "Style nominal (descriptif / pictural)"
+    elif nominal_ratio <= 0.8:
+        style_desc = "Style verbal (dynamique / narratif)"
+    else:
+        style_desc = "Style équilibré (nominal et verbal tempéré)"
+
+    pos_analysis = {
+        "counts": dict(pos),
+        "total_words": W,
+        "content_words": content_count,
+        "function_words": function_count,
+        "lexical_density": lexical_density,
+        "nominal_ratio": nominal_ratio,
+        "style_desc": style_desc,
+    }
+
     return {
         "metrics": metrics,
         "tense_share": tense_share,
+        "pos_analysis": pos_analysis,
         "words": words,
         "W": W,
     }
@@ -342,6 +366,11 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
                 "pour_ne_pas_dire": [], "disait_et_nous": [],
                 "hier_il_y_a": [], "anaphora": []
             },
+            "pos_analysis": {
+                "counts": {}, "total_words": 0, "content_words": 0,
+                "function_words": 0, "lexical_density": 0.0,
+                "nominal_ratio": 0.0, "style_desc": "Texte vide"
+            },
             "phonetics": {
                 "lines": [],
                 "deviations": compute_phoneme_deviations([]),
@@ -375,6 +404,12 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
 
     rows = []
     for i, (l, d, ws, lp, pr_l) in enumerate(zip(lines, docs, unit_words, line_phonetics_list, pr_lines), 1):
+        ws_pos = [t.pos_ for t in ws]
+        pos_cnts = dict(collections.Counter(ws_pos))
+        rhyme_pos = ws[-1].pos_ if ws else ""
+        content_in_line = sum(pos_cnts.get(k, 0) for k in ("NOUN", "VERB", "ADJ", "ADV", "PROPN"))
+        func_in_line = len(ws) - content_in_line
+
         rows.append({
             "line": i, "stanza": l["stanza"], "stanza_start": l["stanza_start"],
             "syllables": pr_l["anatonic_syllables"],
@@ -390,6 +425,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
             "rhyme_letter": pr_l["rhyme_letter"],
             "rhyme_ipa": pr_l["rhyme_ipa"],
             "rhyme_richness": pr_l["rhyme_richness"],
+            "rhyme_pos": rhyme_pos,
             "meschonnic_scansion": pr_l["meschonnic_scansion"],
             "di_cristo_phrasing": pr_l["di_cristo_phrasing"],
             "ipa": lp["ipa"],
@@ -402,6 +438,10 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
             "consonant_pct": round((lp["consonant_count"] / max(lp["phoneme_count"], 1)) * 100, 1) if lp["phoneme_count"] > 0 else 0.0,
             "liaisons": len(lp["liaisons"]),
             "text": l["text"],
+            "word_tokens": [{"text": t.text, "lemma": t.lemma_, "pos": t.pos_} for t in ws],
+            "pos_counts": pos_cnts,
+            "content_words": content_in_line,
+            "function_words": func_in_line,
         })
 
     computed = compute_corpus_metrics(docs, unit_words_list=unit_words, dierese=dierese)
@@ -444,6 +484,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
     return {
         "rows": rows,
         "metrics": metrics,
+        "pos_analysis": computed["pos_analysis"],
         "lines_summary": lines_summary,
         "tense_share": tense_share,
         "keyness": keyness,

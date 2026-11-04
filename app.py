@@ -49,6 +49,42 @@ LABELS_FR = {
     "pos_NUM": "Numéraux (%)",
 }
 
+POS_NAMES_FR = {
+    "NOUN": "Nom",
+    "VERB": "Verbe",
+    "ADJ": "Adjectif",
+    "ADV": "Adverbe",
+    "PROPN": "Nom propre",
+    "AUX": "Auxiliaire",
+    "DET": "Déterminant",
+    "PRON": "Pronom",
+    "ADP": "Préposition",
+    "CCONJ": "Coordination",
+    "SCONJ": "Subordination",
+    "NUM": "Numéral",
+    "INTJ": "Interjection",
+    "PUNCT": "Ponctuation",
+    "SYM": "Symbole",
+    "X": "Autre",
+}
+
+POS_COLORS = {
+    "NOUN": "#1d4ed8",
+    "PROPN": "#2563eb",
+    "VERB": "#dc2626",
+    "AUX": "#f87171",
+    "ADJ": "#16a34a",
+    "ADV": "#ca8a04",
+    "PRON": "#9333ea",
+    "DET": "#64748b",
+    "ADP": "#0891b2",
+    "CCONJ": "#ea580c",
+    "SCONJ": "#c2410c",
+    "NUM": "#0d9488",
+    "INTJ": "#ec4899",
+    "OTHER": "#94a3b8",
+}
+
 SAMPLE_TEXTS = {
     "(Saisie libre ou import de fichier)": "",
     "1. Baudelaire : Correspondances (Alexandrins classiques 12v)": (
@@ -200,6 +236,45 @@ def render_phrasing_html(lines_detail):
     return "\n".join(blocks)
 
 
+def render_pos_text_html(rows_data, filter_tag="TOUS"):
+    """Rendu visuel du texte avec étiquetage morphosyntaxique (POS) coloré."""
+    css = """<style>
+    .pos-box { font-family: 'Segoe UI', -apple-system, sans-serif; margin-bottom: 8px; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff; }
+    .pos-hdr { font-size: 0.78rem; color: #64748b; margin-bottom: 5px; font-weight: 600; }
+    .pos-line { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .pos-token { display: inline-flex; align-items: baseline; padding: 2px 7px; border-radius: 4px; font-size: 0.88rem; border: 1px solid transparent; font-weight: 500; transition: opacity 0.2s; }
+    .pos-lbl { font-size: 0.65rem; margin-left: 4px; font-weight: 700; opacity: 0.85; }
+    .pos-dim { opacity: 0.20; filter: grayscale(90%); }
+    </style>"""
+    lines_html = [css]
+    for r in rows_data:
+        toks = r.get("word_tokens", [])
+        if not toks:
+            continue
+        spans = []
+        for t in toks:
+            tag = t.get("pos", "OTHER")
+            lbl = POS_NAMES_FR.get(tag, tag)
+            color = POS_COLORS.get(tag, "#94a3b8")
+            dim_cls = ""
+            if filter_tag != "TOUS" and filter_tag != tag:
+                dim_cls = "pos-dim"
+            spans.append(
+                f'<span class="pos-token {dim_cls}" style="background:{color}18; color:{color}; border-color:{color}40;">'
+                f'{html.escape(t["text"])}<span class="pos-lbl">{html.escape(lbl)}</span>'
+                f'</span>'
+            )
+        rhyme_cat = r.get("rhyme_pos", "-")
+        rhyme_cat_lbl = POS_NAMES_FR.get(rhyme_cat, rhyme_cat)
+        lines_html.append(
+            f'<div class="pos-box">'
+            f'<div class="pos-hdr">Vers {r["line"]} ｜ Mots pleins : {r.get("content_words", 0)} ｜ Mots outils : {r.get("function_words", 0)} ｜ Rime : {html.escape(rhyme_cat_lbl)} ({html.escape(rhyme_cat)})</div>'
+            f'<div class="pos-line">{"".join(spans)}</div>'
+            f'</div>'
+        )
+    return "\n".join(lines_html)
+
+
 st.set_page_config(page_title="Analyse métrique, rythmique & phonétique", layout="wide")
 st.title("Analyse métrique, rythmique & phonétique du vers français")
 st.caption("Plateforme unifiée : Mètre & Césure ｜ Positions du rythme & Accents ｜ Chaînes phonématiques & Rimes")
@@ -252,6 +327,7 @@ dc = pr["di_cristo"]
 gouv = pr["gouvard"]
 lines_detail = pr["lines_detail"]
 lines_detail_df = pd.DataFrame(lines_detail)
+lines_detail_df["rhyme_pos"] = [r.get("rhyme_pos", "") for r in rows_data]
 
 # =============================================================================
 # Interface unifiée en 5 volets thématiques
@@ -261,7 +337,7 @@ tab_vers, tab_rythme, tab_phon_chain, tab_rimes, tab_phon_dist = st.tabs([
     "2. Rythme & Positions accentuelles",
     "3. Chaînes phonématiques & Recherche IPA",
     "4. Rimes & Structure strophique",
-    "5. Phonétique & Stylométrie",
+    "5. Morphosyntaxe (POS) & Stylométrie",
 ])
 
 # -----------------------------------------------------------------------------
@@ -306,13 +382,13 @@ with tab_vers:
     master_cols = [
         "line", "stanza", "anatonic_syllables", "genre", "meter_code",
         "caesura_code", "measures_str", "rhyme_letter", "rhyme_richness",
-        "discordances", "text", "ipa",
+        "rhyme_pos", "discordances", "text", "ipa",
     ]
     master_rename = {
         "line": "Vers", "stanza": "Strophe", "anatonic_syllables": "Syllabes", "genre": "Genre",
         "meter_code": "Mètre", "caesura_code": "Césure / Hémistiches", "measures_str": "Mesures rythmiques",
-        "rhyme_letter": "Rime", "rhyme_richness": "Richesse", "discordances": "Discordance syntaxique",
-        "text": "Texte", "ipa": "IPA",
+        "rhyme_letter": "Rime", "rhyme_richness": "Richesse", "rhyme_pos": "Catégorie rime",
+        "discordances": "Discordance syntaxique", "text": "Texte", "ipa": "IPA",
     }
     st.dataframe(lines_detail_df[master_cols].rename(columns=master_rename), width="stretch", hide_index=True)
 
@@ -331,9 +407,12 @@ with tab_vers:
         c_insp1.metric("Mètre compté", f"{sel_row['anatonic_syllables']} syllabes ({sel_row['genre']})")
         c_insp2.metric("Césure & Hémistiches", sel_row['caesura_code'])
         c_insp3.metric("Mesures rythmiques", sel_row['measures_str'])
+        sel_rhyme_pos = rows_data[selected_line_idx - 1].get("rhyme_pos", "")
+        sel_rhyme_pos_lbl = POS_NAMES_FR.get(sel_rhyme_pos, sel_rhyme_pos)
         c_insp4.metric("Rime", f"{sel_row['rhyme_letter']} [{sel_row['rhyme_ipa']}] ({sel_row['rhyme_richness']})")
         st.markdown(f"- **Texte** : {sel_row['text']}")
         st.markdown(f"- **Transcription IPA** : `{sel_row['ipa']}`")
+        st.markdown(f"- **Catégorie grammaticale de la rime (POS)** : {sel_rhyme_pos_lbl} (`{sel_rhyme_pos}`)")
         st.markdown(f"- **Discordance syntaxique** : {sel_row['discordances']}")
         st.markdown(f"- **Phrasé prosodique** : `{sel_row['di_cristo_phrasing']}`")
 
@@ -758,6 +837,59 @@ with tab_rimes:
         alt_rate = pr_sum.get("alternance_rate", 0.0)
         st.metric("Taux de respect de l'alternance M/F", f"{alt_rate:.1f}%", help="Respect de la règle classique d'alternance des rimes masculines et féminines")
 
+    # Analyse grammaticale des rimes (rimes grammaticales vs hétérogènes)
+    st.subheader("Homogénéité morphosyntaxique des rimes")
+    st.caption("Une rime grammaticale associe deux mots de même catégorie morphologique (ex. Verbe-Verbe, Nom-Nom). La poétique classique valorise la variété par des rimes hétérogènes (ex. Nom-Adjectif, Verbe-Nom).")
+    rhyme_pairs = []
+    for st_idx, st_data in enumerate(pr.get("stanzas_detail", []), 1):
+        st_lines = [r for r in rows_data if r.get("stanza") == st_idx]
+        by_letter = collections.defaultdict(list)
+        for l_row in st_lines:
+            if l_row.get("rhyme_letter"):
+                by_letter[l_row["rhyme_letter"]].append(l_row)
+        for let, g_lines in by_letter.items():
+            if len(g_lines) >= 2:
+                for i in range(len(g_lines)):
+                    for j in range(i + 1, len(g_lines)):
+                        p1 = g_lines[i].get("rhyme_pos", "")
+                        p2 = g_lines[j].get("rhyme_pos", "")
+                        is_gram = (p1 == p2 and bool(p1))
+                        w1 = g_lines[i]["text"].strip().rstrip(".,;:!?»'\"").split()[-1] if g_lines[i]["text"].strip() else ""
+                        w2 = g_lines[j]["text"].strip().rstrip(".,;:!?»'\"").split()[-1] if g_lines[j]["text"].strip() else ""
+                        rhyme_pairs.append({
+                            "strophe": st_idx,
+                            "rime": let,
+                            "vers_pair": f"V{g_lines[i]['line']} - V{g_lines[j]['line']}",
+                            "mots": f"{w1} ｜ {w2}",
+                            "categories": f"{POS_NAMES_FR.get(p1, p1)} ｜ {POS_NAMES_FR.get(p2, p2)}",
+                            "type": "Rime grammaticale (homogène)" if is_gram else "Rime hétérogène (mixte)",
+                            "is_gram": is_gram,
+                        })
+
+    rg_col1, rg_col2, rg_col3 = st.columns(3)
+    if rhyme_pairs:
+        total_rp = len(rhyme_pairs)
+        gram_rp = sum(1 for rp in rhyme_pairs if rp["is_gram"])
+        hetero_rp = total_rp - gram_rp
+        gram_pct = round(100.0 * gram_rp / total_rp, 1)
+        hetero_pct = round(100.0 * hetero_rp / total_rp, 1)
+
+        rg_col1.metric("Paires de rimes analysées", f"{total_rp}", border=True)
+        rg_col2.metric("Rimes hétérogènes (richesse stylistique)", f"{hetero_pct}%", f"{hetero_rp} paires", border=True)
+        rg_col3.metric("Rimes grammaticales (même catégorie)", f"{gram_pct}%", f"{gram_rp} paires", border=True)
+
+        with st.expander("Détail des paires de rimes et catégories grammaticales", expanded=False):
+            st.dataframe(
+                pd.DataFrame(rhyme_pairs)[["strophe", "rime", "vers_pair", "mots", "categories", "type"]].rename(columns={
+                    "strophe": "Strophe", "rime": "Rime", "vers_pair": "Vers associés",
+                    "mots": "Mots rimants", "categories": "Catégories POS", "type": "Type morphologique"
+                }),
+                width="stretch",
+                hide_index=True
+            )
+    else:
+        st.info("Aucune paire de rimes consécutives ou strophiques détectée.")
+
     st.subheader("Traitement du e caduc, diérèses et hiatus")
     e_col1, e_col2, e_col3 = st.columns(3)
     with e_col1:
@@ -780,9 +912,112 @@ with tab_rimes:
 
 
 # -----------------------------------------------------------------------------
-# Onglet 5 : Phonétique & Stylométrie
+# Onglet 5 : Morphosyntaxe (POS) & Stylométrie
 # -----------------------------------------------------------------------------
 with tab_phon_dist:
+    st.subheader("Profil morphosyntaxique (POS) & Densité lexicale")
+    st.caption("Répartition des parties du discours (mots pleins vs mots outils) et indice de nominalité stylistique.")
+
+    pos_an = res.get("pos_analysis", {})
+    pos_counts = pos_an.get("counts", {})
+    W = pos_an.get("total_words", 0)
+
+    pm1, pm2, pm3, pm4, pm5 = st.columns(5)
+    pm1.metric("Mots au total (W)", f"{W:,}", border=True)
+    pm2.metric("Mots pleins (Lexique)", f"{pos_an.get('content_words', 0):,}", help="Noms, verbes pleins, adjectifs, adverbes, noms propres", border=True)
+    pm3.metric("Mots outils (Grammaire)", f"{pos_an.get('function_words', 0):,}", help="Déterminants, pronoms, prépositions, conjonctions, auxiliaires", border=True)
+    pm4.metric("Densité lexicale", f"{pos_an.get('lexical_density', 0.0):.1f}%", help="Part des mots porteurs de sens sémantique plein", border=True)
+    pm5.metric("Indice de nominalité", f"{pos_an.get('nominal_ratio', 0.0):.2f}", help="Ratio Noms / Verbes. ≥ 1.5 : style nominal, ≤ 0.8 : style verbal", border=True)
+
+    st.info(f"**Diagnostic stylistique du texte** : {pos_an.get('style_desc', '-')}")
+
+    pos_c1, pos_c2 = st.columns([3, 2])
+    with pos_c1:
+        st.markdown("**Distribution globale des parties du discours (POS)**")
+        pos_list = []
+        for tag, count in pos_counts.items():
+            if tag in ("PUNCT", "SPACE", "SYM", "X"):
+                continue
+            pct = round(100.0 * count / max(W, 1), 2)
+            lbl = POS_NAMES_FR.get(tag, tag)
+            pos_list.append({
+                "tag": tag,
+                "label": f"{lbl} ({tag})",
+                "count": count,
+                "pct": pct,
+            })
+        if pos_list:
+            pos_df = pd.DataFrame(pos_list).sort_values("count", ascending=False)
+            chart_pos_bar = alt.Chart(pos_df).mark_bar().encode(
+                x=alt.X("count:Q", title="Nombre d'occurrences"),
+                y=alt.Y("label:N", sort="-x", title=None),
+                color=alt.Color("tag:N", scale=alt.Scale(
+                    domain=list(POS_COLORS.keys()),
+                    range=list(POS_COLORS.values())
+                ), legend=None),
+                tooltip=[
+                    alt.Tooltip("label:N", title="Catégorie"),
+                    alt.Tooltip("count:Q", title="Occurrences"),
+                    alt.Tooltip("pct:Q", title="Part (%)", format=".2f"),
+                ]
+            ).properties(height=260)
+            st.altair_chart(chart_pos_bar, width="stretch")
+
+    with pos_c2:
+        st.markdown("**Composition par vers (Mots pleins vs Outils)**")
+        lines_pos_records = []
+        for r in rows_data:
+            lines_pos_records.append({
+                "line": r["line"],
+                "content": r.get("content_words", 0),
+                "function": r.get("function_words", 0),
+            })
+        if lines_pos_records:
+            lp_df = pd.DataFrame(lines_pos_records)
+            lp_melt = lp_df.melt(id_vars=["line"], value_vars=["content", "function"], var_name="Type", value_name="Nombre")
+            lp_melt["Type"] = lp_melt["Type"].map({"content": "Mots pleins", "function": "Mots outils"})
+            chart_lp = alt.Chart(lp_melt).mark_bar().encode(
+                x=alt.X("line:O", title="Numéro du vers"),
+                y=alt.Y("Nombre:Q", title="Nombre de mots"),
+                color=alt.Color("Type:N", scale=alt.Scale(domain=["Mots pleins", "Mots outils"], range=["#2563eb", "#94a3b8"]), title=None),
+                tooltip=["line:O", "Type:N", "Nombre:Q"]
+            ).properties(height=260)
+            st.altair_chart(chart_lp, width="stretch")
+
+    st.subheader("Visualiseur textuel morphosyntaxique")
+    st.caption("Chaque mot du poème est annoté avec sa catégorie grammaticale et coloré selon son rôle syntaxique. Utilisez le sélecteur ci-dessous pour filtrer une catégorie spécifique.")
+
+    active_tags = ["TOUS"] + [t for t in POS_NAMES_FR.keys() if t in pos_counts]
+    filter_choice = st.selectbox(
+        "Filtrer par catégorie morphosyntaxique",
+        options=active_tags,
+        format_func=lambda x: "Afficher toutes les catégories" if x == "TOUS" else f"{POS_NAMES_FR.get(x, x)} ({x}) — {pos_counts.get(x, 0)} occurrences",
+        help="Met en valeur les mots appartenant à la catégorie choisie et estompe les autres."
+    )
+    st.html(render_pos_text_html(rows_data, filter_choice))
+
+    with st.expander("Tableau détaillé de la composition grammaticale par vers", expanded=False):
+        table_lines_pos = []
+        for r in rows_data:
+            cnts = r.get("pos_counts", {})
+            entry = {
+                "Vers": r["line"],
+                "Texte": r["text"],
+                "Noms": cnts.get("NOUN", 0) + cnts.get("PROPN", 0),
+                "Verbes": cnts.get("VERB", 0) + cnts.get("AUX", 0),
+                "Adjectifs": cnts.get("ADJ", 0),
+                "Adverbes": cnts.get("ADV", 0),
+                "Déterminants": cnts.get("DET", 0),
+                "Pronoms": cnts.get("PRON", 0),
+                "Prépositions": cnts.get("ADP", 0),
+                "Conjonctions": cnts.get("CCONJ", 0) + cnts.get("SCONJ", 0),
+                "Mots pleins": r.get("content_words", 0),
+                "Mots outils": r.get("function_words", 0),
+                "Rime (POS)": f"{POS_NAMES_FR.get(r.get('rhyme_pos', ''), r.get('rhyme_pos', ''))} ({r.get('rhyme_pos', '-')})",
+            }
+            table_lines_pos.append(entry)
+        st.dataframe(pd.DataFrame(table_lines_pos), width="stretch", hide_index=True)
+
     st.subheader("Profil phonologique et stylométrique du poème")
 
     phonetics_data = res["phonetics"]

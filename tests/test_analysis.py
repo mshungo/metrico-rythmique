@@ -120,3 +120,27 @@ def test_phoneme_length_normalization_and_deviations():
     z_long = round((cnt_long - e_long) / denom_long, 2)
     assert z_long > z_short > 0.0  # サンプルサイズが大きい長行の方が統計的有意性が高く評価される
 
+
+def test_pos_analysis():
+    """品詞構成（POS分析）、語彙密度、名詞比率、各行トークンの品詞情報テスト。"""
+    sample = (
+        "La Nature est un temple où de vivants piliers\n"
+        "Laissent parfois sortir de confuses paroles ;"
+    )
+    res = analyze(sample)
+    pos_an = res["pos_analysis"]
+    assert pos_an["total_words"] > 0
+    assert pos_an["content_words"] > 0
+    assert pos_an["function_words"] > 0
+    assert pos_an["lexical_density"] > 0.0
+    assert pos_an["nominal_ratio"] > 0.0
+    assert "style_desc" in pos_an
+
+    r1 = res["rows"][0]
+    assert len(r1["word_tokens"]) > 0
+    assert "pos" in r1["word_tokens"][0]
+    assert r1["content_words"] > 0
+    assert r1["function_words"] > 0
+    assert r1["rhyme_pos"] in ("NOUN", "ADJ", "VERB", "ADV", "PROPN")
+
+
