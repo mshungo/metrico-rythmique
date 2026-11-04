@@ -252,13 +252,17 @@ def render_pos_text_html(rows_data, filter_tag="TOUS"):
         if not toks:
             continue
         spans = []
+        filter_count = 0
         for t in toks:
             tag = t.get("pos", "OTHER")
             lbl = POS_NAMES_FR.get(tag, tag)
             color = POS_COLORS.get(tag, "#94a3b8")
             dim_cls = ""
-            if filter_tag != "TOUS" and filter_tag != tag:
-                dim_cls = "pos-dim"
+            if filter_tag != "TOUS":
+                if filter_tag == tag:
+                    filter_count += 1
+                else:
+                    dim_cls = "pos-dim"
             spans.append(
                 f'<span class="pos-token {dim_cls}" style="background:{color}18; color:{color}; border-color:{color}40;">'
                 f'{html.escape(t["text"])}<span class="pos-lbl">{html.escape(lbl)}</span>'
@@ -266,9 +270,14 @@ def render_pos_text_html(rows_data, filter_tag="TOUS"):
             )
         rhyme_cat = r.get("rhyme_pos", "-")
         rhyme_cat_lbl = POS_NAMES_FR.get(rhyme_cat, rhyme_cat)
+        extra_hdr = ""
+        if filter_tag != "TOUS":
+            filt_lbl = POS_NAMES_FR.get(filter_tag, filter_tag)
+            extra_hdr = f' ｜ <span style="color:#0f172a; font-weight:700;">{html.escape(filt_lbl)} : {filter_count}</span>'
+
         lines_html.append(
             f'<div class="pos-box">'
-            f'<div class="pos-hdr">Vers {r["line"]} ｜ Mots pleins : {r.get("content_words", 0)} ｜ Mots outils : {r.get("function_words", 0)} ｜ Rime : {html.escape(rhyme_cat_lbl)} ({html.escape(rhyme_cat)})</div>'
+            f'<div class="pos-hdr">Vers {r["line"]}{extra_hdr} ｜ Mots pleins : {r.get("content_words", 0)} ｜ Mots outils : {r.get("function_words", 0)} ｜ Rime : {html.escape(rhyme_cat_lbl)} ({html.escape(rhyme_cat)})</div>'
             f'<div class="pos-line">{"".join(spans)}</div>'
             f'</div>'
         )
@@ -994,6 +1003,27 @@ with tab_phon_dist:
         format_func=lambda x: "Afficher toutes les catégories" if x == "TOUS" else f"{POS_NAMES_FR.get(x, x)} ({x}) — {pos_counts.get(x, 0)} occurrences",
         help="Met en valeur les mots appartenant à la catégorie choisie et estompe les autres."
     )
+
+    if filter_choice != "TOUS":
+        f_lbl = POS_NAMES_FR.get(filter_choice, filter_choice)
+        f_color = POS_COLORS.get(filter_choice, "#2563eb")
+        v_data = []
+        for r in rows_data:
+            c = r.get("pos_counts", {}).get(filter_choice, 0)
+            v_data.append({"line": r["line"], "count": c, "text": r["text"]})
+        v_df = pd.DataFrame(v_data)
+        chart_filtered = alt.Chart(v_df).mark_bar(color=f_color).encode(
+            x=alt.X("line:O", title="Numéro du vers"),
+            y=alt.Y("count:Q", title=f"Nombre de : {f_lbl}", axis=alt.Axis(tickMinStep=1)),
+            tooltip=[
+                alt.Tooltip("line:O", title="Vers"),
+                alt.Tooltip("count:Q", title=f"Occurrences de {f_lbl}"),
+                alt.Tooltip("text:N", title="Texte du vers"),
+            ]
+        ).properties(height=180)
+        st.markdown(f"**Occurrences vers par vers : {f_lbl} ({filter_choice})**")
+        st.altair_chart(chart_filtered, width="stretch")
+
     st.html(render_pos_text_html(rows_data, filter_choice))
 
     with st.expander("Tableau détaillé de la composition grammaticale par vers", expanded=False):
