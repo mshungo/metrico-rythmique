@@ -540,48 +540,110 @@ with tab_phon_chain:
     valid_ph_stats = [p for p in all_stats_raw if p["phoneme"] != "ə"]
     ph_ref_dict = {p["phoneme"]: p.get("ref_pct", 0.0) / 100.0 for p in valid_ph_stats}
 
-    if "ipa_search_query" not in st.session_state:
-        st.session_state["ipa_search_query"] = "ɔʁ"
+    if "ipa_multiselect" not in st.session_state:
+        st.session_state["ipa_multiselect"] = ["ɔʁ"]
 
-    def set_search_query(q_str):
-        st.session_state["ipa_search_query"] = q_str
+    def add_ipa_token(token):
+        curr = list(st.session_state.get("ipa_multiselect", []))
+        if token not in curr:
+            curr.append(token)
+            st.session_state["ipa_multiselect"] = curr
 
-    st.markdown("**Rechercher un phonème ou une chaîne de phonèmes IPA (séparation par virgule pour plusieurs) :**")
-    search_query = st.text_input(
-        "Recherche IPA",
-        key="ipa_search_query",
-        placeholder="ex. ɔʁ, kl, ɑ̃, s",
+    def clear_ipa_tokens():
+        st.session_state["ipa_multiselect"] = []
+
+    def add_custom_ipa():
+        val = st.session_state.get("custom_ipa_input", "").strip()
+        if val:
+            for item in val.split(","):
+                token = item.strip().strip("[]/ ")
+                if token:
+                    add_ipa_token(token)
+            st.session_state["custom_ipa_input"] = ""
+
+    st.markdown("**Palette & Clavier virtuel IPA (cliquez sur un symbole pour l'ajouter directement) :**")
+    kb_cat = st.radio(
+        "Catégorie phonétique",
+        options=["Voyelles", "Consonnes", "Chaînes poétiques fréquentes", "Saisie libre"],
+        index=0,
+        horizontal=True,
         label_visibility="collapsed",
-        help="Recherchez un phonème unique ou une chaîne n-gramme (ex. ɔʁ, wa, st). Séparer par des virgules."
     )
 
-    st.caption("Raccourcis rapides :")
-    preset_chips = ["ɔʁ", "wa", "st", "pʁ", "ɑ̃", "ɛ̃", "ɔ̃", "ʁ", "s", "k", "Effacer"]
-    cols_pre = st.columns(len(preset_chips))
-    for col, pre in zip(cols_pre, preset_chips):
-        v = "" if pre == "Effacer" else pre
-        col.button(pre, key=f"btn_pre_{pre}", on_click=set_search_query, args=(v,), use_container_width=True)
+    if kb_cat == "Voyelles":
+        st.caption("Voyelles orales :")
+        v_orales = ["i", "e", "ɛ", "a", "ɑ", "ɔ", "o", "u", "y", "ø", "œ"]
+        cols_vo = st.columns(len(v_orales))
+        for col, v in zip(cols_vo, v_orales):
+            col.button(f"[{v}]", key=f"kb_vo_{v}", on_click=add_ipa_token, args=(v,), use_container_width=True)
 
-    with st.expander("Ajouter depuis la liste complète des 36 phonèmes du français (Option)", expanded=False):
-        ph_options = [p["phoneme"] for p in valid_ph_stats]
-        def format_ph_opt(ph_char):
-            p = next((item for item in valid_ph_stats if item["phoneme"] == ph_char), None)
-            return f"[{ph_char}] {p['name']} ({p.get('count', 0)} occ.)" if p else f"[{ph_char}]"
-        selected_from_list = st.multiselect(
-            "Phonèmes supplémentaires",
-            options=ph_options,
-            default=[],
-            format_func=format_ph_opt
-        )
+        st.caption("Voyelles nasales & semi-voyelles (glides) :")
+        v_nas_semi = ["ɑ̃", "ɛ̃", "ɔ̃", "œ̃", "j", "w", "ɥ"]
+        cols_vns = st.columns(len(v_nas_semi) + 2)
+        for col, v in zip(cols_vns[:len(v_nas_semi)], v_nas_semi):
+            col.button(f"[{v}]", key=f"kb_vns_{v}", on_click=add_ipa_token, args=(v,), use_container_width=True)
+        cols_vns[-1].button("Effacer tout", key="kb_clr_voy", on_click=clear_ipa_tokens, use_container_width=True)
 
-    raw_queries = [q.strip() for q in search_query.split(",") if q.strip()]
-    for ph in selected_from_list:
-        if ph not in raw_queries:
-            raw_queries.append(ph)
+    elif kb_cat == "Consonnes":
+        st.caption("Occlusives & Fricatives :")
+        c_occ_fric = ["p", "b", "t", "d", "k", "g", "f", "v", "s", "z", "ʃ", "ʒ", "ʁ"]
+        cols_cf = st.columns(len(c_occ_fric))
+        for col, c in zip(cols_cf, c_occ_fric):
+            col.button(f"[{c}]", key=f"kb_cf_{c}", on_click=add_ipa_token, args=(c,), use_container_width=True)
+
+        st.caption("Nasales & Liquides :")
+        c_nas_liq = ["m", "n", "ɲ", "ŋ", "l"]
+        cols_cnl = st.columns(len(c_nas_liq) + 3)
+        for col, c in zip(cols_cnl[:len(c_nas_liq)], c_nas_liq):
+            col.button(f"[{c}]", key=f"kb_cnl_{c}", on_click=add_ipa_token, args=(c,), use_container_width=True)
+        cols_cnl[-1].button("Effacer tout", key="kb_clr_cons", on_click=clear_ipa_tokens, use_container_width=True)
+
+    elif kb_cat == "Chaînes poétiques fréquentes":
+        st.caption("Groupes et combinaisons poétiques fréquentes :")
+        freq_clusters = ["ɔʁ", "wa", "st", "pʁ", "tʁ", "kʁ", "bl", "fl", "ɑ̃s", "ɛ̃t"]
+        cols_fq = st.columns(len(freq_clusters) + 2)
+        for col, fq in zip(cols_fq[:len(freq_clusters)], freq_clusters):
+            col.button(f"[{fq}]", key=f"kb_fq_{fq}", on_click=add_ipa_token, args=(fq,), use_container_width=True)
+        cols_fq[-1].button("Effacer tout", key="kb_clr_freq", on_click=clear_ipa_tokens, use_container_width=True)
+
+    else:
+        c_in1, c_in2 = st.columns([4, 1])
+        with c_in1:
+            st.text_input(
+                "Saisie libre (n-grammes ou phonèmes séparés par virgules)",
+                key="custom_ipa_input",
+                placeholder="ex. ɔʁ, kl, wa, ɑ̃s",
+                label_visibility="collapsed",
+            )
+        with c_in2:
+            st.button("+ Ajouter", key="btn_add_custom", on_click=add_custom_ipa, use_container_width=True)
+
+    # Base options for multiselect
+    std_ph_options = [p["phoneme"] for p in valid_ph_stats]
+    frequent_presets = ["ɔʁ", "wa", "st", "pʁ", "tʁ", "kʁ", "bl", "fl", "ɑ̃s", "ɛ̃t"]
+    all_multi_options = list(dict.fromkeys(
+        list(st.session_state.get("ipa_multiselect", [])) +
+        frequent_presets +
+        std_ph_options
+    ))
+
+    def format_ph_opt(ph_token):
+        p = next((item for item in valid_ph_stats if item["phoneme"] == ph_token), None)
+        if p:
+            return f"[{ph_token}] {p['name']} ({p.get('count', 0)} occ.)"
+        return f"[{ph_token}] (Chaîne ciblée)"
+
+    selected_tokens = st.multiselect(
+        "Phonèmes et chaînes sélectionnés pour l'analyse :",
+        options=all_multi_options,
+        key="ipa_multiselect",
+        format_func=format_ph_opt,
+        help="Ajoutez ou supprimez des phonèmes/chaînes pour afficher leurs graphiques individuels d'évolution."
+    )
 
     target_queries = []
     seen_labels = set()
-    for q in raw_queries:
+    for q in selected_tokens:
         clean_q = q.strip("[]/ ")
         if not clean_q:
             continue
@@ -706,68 +768,116 @@ with tab_phon_chain:
             val_tooltip_title = "Cumul"
             val_format = "d"
 
-        chart_tr1, chart_tr2 = st.columns([3, 2])
-        with chart_tr1:
-            st.markdown(f"**Évolution vers par vers ({y_title})**")
-            line_chart = alt.Chart(track_df).mark_line(point=True).encode(
-                x=alt.X("line:O", title="Numéro du vers"),
-                y=alt.Y(f"{val_col}:Q", title=y_title),
-                color=alt.Color("phoneme:N", title="Phonème / Chaîne", scale=alt.Scale(scheme="category10")),
-                tooltip=[
-                    alt.Tooltip("line:O", title="Vers"),
-                    alt.Tooltip("stanza:O", title="Strophe"),
-                    alt.Tooltip("syllables:Q", title="Syllabes"),
-                    alt.Tooltip("phoneme:N", title="Phonème"),
-                    alt.Tooltip("count:Q", title="Occurrences réelles"),
-                    alt.Tooltip("norm_12:Q", title="Standard 12v", format=".2f"),
-                    alt.Tooltip("oe_ratio:Q", title="Ratio O/E", format=".2f"),
-                    alt.Tooltip("z_line:Q", title="Score z", format="+.2f"),
-                    alt.Tooltip("pct:Q", title="Part (%)", format=".1f"),
-                    alt.Tooltip("cumulative:Q", title="Cumul"),
-                    alt.Tooltip("text:N", title="Texte"),
-                    alt.Tooltip("ipa:N", title="IPA"),
-                ]
-            ).properties(height=320)
+        PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#db2777", "#4b5563"]
 
-            if val_col == "oe_ratio":
-                ref_oe = alt.Chart(pd.DataFrame([{"y": 1.0}])).mark_rule(
-                    color="#ef4444", strokeDash=[4, 4], strokeWidth=1.5
-                ).encode(y="y:Q")
-                line_chart = line_chart + ref_oe
-            elif val_col == "z_line":
-                ref_z0 = alt.Chart(pd.DataFrame([{"y": 0.0}])).mark_rule(color="#64748b", strokeWidth=1.5).encode(y="y:Q")
-                ref_zp = alt.Chart(pd.DataFrame([{"y": 1.96}])).mark_rule(color="#f59e0b", strokeDash=[4, 4], strokeWidth=1.2).encode(y="y:Q")
-                line_chart = line_chart + ref_z0 + ref_zp
+        st.subheader(f"Graphiques individuels d'évolution vers par vers ({val_tooltip_title})")
+        st.caption(f"Profil individuel pour chaque phonème ou chaîne sélectionné ({y_title}). La ligne pointillée indique la moyenne par vers.")
 
-            st.altair_chart(line_chart, width="stretch")
+        n_targets = len(target_queries)
+        cols_per_row = 2 if n_targets >= 2 else 1
 
-        with chart_tr2:
-            st.markdown(f"**Carte thermique (Heatmap) par vers ({val_tooltip_title})**")
-            heatmap = alt.Chart(track_df).mark_rect().encode(
-                x=alt.X("line:O", title="Numéro du vers"),
-                y=alt.Y("phoneme:N", title="Phonème / Chaîne"),
-                color=alt.Color(f"{val_col}:Q", title=val_tooltip_title, scale=alt.Scale(scheme="blues")),
-                tooltip=[
-                    alt.Tooltip("line:O", title="Vers"),
-                    alt.Tooltip("syllables:Q", title="Syllabes"),
-                    alt.Tooltip("phoneme:N", title="Phonème"),
-                    alt.Tooltip(f"{val_col}:Q", title=val_tooltip_title, format=val_format),
-                    alt.Tooltip("count:Q", title="Occurrences"),
-                    alt.Tooltip("text:N", title="Texte"),
-                ]
-            ).properties(height=320)
+        for i in range(0, n_targets, cols_per_row):
+            chart_cols = st.columns(cols_per_row)
+            for c_idx in range(cols_per_row):
+                target_idx = i + c_idx
+                if target_idx >= n_targets:
+                    break
+                q_item = target_queries[target_idx]
+                t_label = q_item["label"]
+                color = PALETTE[target_idx % len(PALETTE)]
+                col_ui = chart_cols[c_idx]
 
-            max_v = float(track_df[val_col].max()) if not track_df.empty else 1.0
-            thresh = max_v * 0.65
-            text_overlay = alt.Chart(track_df).mark_text(baseline="middle", fontSize=10).encode(
-                x=alt.X("line:O"),
-                y=alt.Y("phoneme:N"),
-                text=alt.condition(f"datum['{val_col}'] != 0", alt.Text(f"{val_col}:Q", format=val_format), alt.value("")),
-                color=alt.condition(f"datum['{val_col}'] >= {thresh} && {thresh} > 0", alt.value("#ffffff"), alt.value("#0f172a"))
-            )
-            st.altair_chart(heatmap + text_overlay, width="stretch")
+                df_sub = track_df[track_df["phoneme"] == t_label]
+                tot_c = int(df_sub["count"].sum())
+                mean_v = float(df_sub[val_col].mean()) if not df_sub.empty else 0.0
+                max_v = float(df_sub[val_col].max()) if not df_sub.empty else 0.0
+                best_line = int(df_sub.loc[df_sub[val_col].idxmax()]["line"]) if not df_sub.empty and max_v > 0 else "-"
+                mean_str = f"{mean_v:.2f}"
+                max_str = f"{int(max_v)}" if val_format == "d" else f"{max_v:{val_format}}"
 
-        with st.expander("Tableau détaillé des occurrences par vers", expanded=False):
+                with col_ui:
+                    st.markdown(
+                        f"**{t_label}** ｜ Total : **{tot_c}** occ. ｜ Moyenne : **{mean_str}** ｜ Pic : Vers **{best_line}** ({max_str})"
+                    )
+                    base = alt.Chart(df_sub).encode(
+                        x=alt.X("line:O", title="Numéro du vers"),
+                        tooltip=[
+                            alt.Tooltip("line:O", title="Vers"),
+                            alt.Tooltip("stanza:O", title="Strophe"),
+                            alt.Tooltip("syllables:Q", title="Syllabes"),
+                            alt.Tooltip("count:Q", title="Occurrences réelles"),
+                            alt.Tooltip(f"{val_col}:Q", title=val_tooltip_title, format=val_format),
+                            alt.Tooltip("norm_12:Q", title="Standard 12v", format=".2f"),
+                            alt.Tooltip("z_line:Q", title="Score z", format="+.2f"),
+                            alt.Tooltip("oe_ratio:Q", title="Ratio O/E", format=".2f"),
+                            alt.Tooltip("text:N", title="Texte du vers"),
+                            alt.Tooltip("ipa:N", title="IPA du vers"),
+                        ]
+                    )
+                    bars = base.mark_bar(opacity=0.35, color=color).encode(
+                        y=alt.Y(f"{val_col}:Q", title=val_tooltip_title, axis=alt.Axis(tickMinStep=1 if val_col == "count" else None))
+                    )
+                    lines = base.mark_line(point=True, strokeWidth=2.2, color=color).encode(
+                        y=alt.Y(f"{val_col}:Q")
+                    )
+                    mean_rule = alt.Chart(pd.DataFrame([{"mean_val": mean_v}])).mark_rule(
+                        color=color, strokeDash=[4, 4], strokeWidth=1.2
+                    ).encode(y="mean_val:Q")
+
+                    chart_obj = (bars + lines + mean_rule).properties(height=230)
+
+                    if val_col == "oe_ratio":
+                        ref_1 = alt.Chart(pd.DataFrame([{"y": 1.0}])).mark_rule(color="#ef4444", strokeDash=[3, 3], strokeWidth=1).encode(y="y:Q")
+                        chart_obj = chart_obj + ref_1
+                    elif val_col == "z_line":
+                        ref_0 = alt.Chart(pd.DataFrame([{"y": 0.0}])).mark_rule(color="#64748b", strokeWidth=1).encode(y="y:Q")
+                        chart_obj = chart_obj + ref_0
+
+                    st.altair_chart(chart_obj, width="stretch")
+
+        with st.expander("Vue comparative superposée & Carte thermique (Heatmap)", expanded=False):
+            chart_tr1, chart_tr2 = st.columns([3, 2])
+            with chart_tr1:
+                st.markdown(f"**Comparaison superposée ({y_title})**")
+                line_chart = alt.Chart(track_df).mark_line(point=True).encode(
+                    x=alt.X("line:O", title="Numéro du vers"),
+                    y=alt.Y(f"{val_col}:Q", title=y_title),
+                    color=alt.Color("phoneme:N", title="Phonème / Chaîne", scale=alt.Scale(scheme="category10")),
+                    tooltip=[
+                        alt.Tooltip("line:O", title="Vers"),
+                        alt.Tooltip("stanza:O", title="Strophe"),
+                        alt.Tooltip("syllables:Q", title="Syllabes"),
+                        alt.Tooltip("phoneme:N", title="Phonème"),
+                        alt.Tooltip("count:Q", title="Occurrences réelles"),
+                        alt.Tooltip("norm_12:Q", title="Standard 12v", format=".2f"),
+                        alt.Tooltip("oe_ratio:Q", title="Ratio O/E", format=".2f"),
+                        alt.Tooltip("z_line:Q", title="Score z", format="+.2f"),
+                        alt.Tooltip("pct:Q", title="Part (%)", format=".1f"),
+                        alt.Tooltip("cumulative:Q", title="Cumul"),
+                        alt.Tooltip("text:N", title="Texte"),
+                        alt.Tooltip("ipa:N", title="IPA"),
+                    ]
+                ).properties(height=300)
+                st.altair_chart(line_chart, width="stretch")
+
+            with chart_tr2:
+                st.markdown(f"**Carte thermique (Heatmap) par vers ({val_tooltip_title})**")
+                heatmap = alt.Chart(track_df).mark_rect().encode(
+                    x=alt.X("line:O", title="Numéro du vers"),
+                    y=alt.Y("phoneme:N", title="Phonème / Chaîne"),
+                    color=alt.Color(f"{val_col}:Q", title=val_tooltip_title, scale=alt.Scale(scheme="blues")),
+                    tooltip=[
+                        alt.Tooltip("line:O", title="Vers"),
+                        alt.Tooltip("syllables:Q", title="Syllabes"),
+                        alt.Tooltip("phoneme:N", title="Phonème"),
+                        alt.Tooltip(f"{val_col}:Q", title=val_tooltip_title, format=val_format),
+                        alt.Tooltip("count:Q", title="Occurrences"),
+                        alt.Tooltip("text:N", title="Texte"),
+                    ]
+                ).properties(height=300)
+                st.altair_chart(heatmap, width="stretch")
+
+            st.markdown("**Tableau détaillé des occurrences par vers**")
             pivot_counts = track_df.pivot(index=["line", "stanza", "syllables", "text"], columns="phoneme", values=val_col).reset_index()
             ph_cols = [q["label"] for q in target_queries if q["label"] in pivot_counts.columns]
             pivot_counts["Total"] = pivot_counts[ph_cols].sum(axis=1).round(2)
@@ -780,7 +890,7 @@ with tab_phon_chain:
                 hide_index=True
             )
     else:
-        st.info("Veuillez saisir un phonème ou une chaîne IPA dans le champ ci-dessus.")
+        st.info("Veuillez sélectionner au moins un phonème ou une chaîne IPA dans la palette ou le sélecteur ci-dessus.")
 
     st.subheader("Réseau des chaînes phonématiques & Échos sonores")
     s_col1, s_col2 = st.columns(2)
