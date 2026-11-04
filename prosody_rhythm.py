@@ -2135,8 +2135,9 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
     opening_map = [_extract_meschonnic_opening_consonants(s) for s in all_sylls]
 
     # 近接性上限 (Proximité des phonèmes répétés, pp. 139-141):
-    # 定型詩句 (≤14音節) では詩句全体を1フレーム (最大間隔11音節) とし、長大自由詩・散文行では最大ステップ9音節に制限
-    max_step = 11 if n_c <= 14 else 9
+    # Couplage (2音節の反復) は同一リズム群・隣接群内 (最大間隔4音節) に限定。
+    # 3音節以上の真の系列 (série) は各隣接間隔が4音節以内であれば詩句全体に展開可能。
+    max_step = 4
 
     # 各算入音節 (0..n_c-1) および余剰音節 (n_c) に付与される連鎖根拠リスト
     syl_triggers = [[] for _ in range(n_all)]
@@ -2161,7 +2162,7 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
         pos_list = cons_positions[c]
         if len(pos_list) < 2:
             continue
-        # max_step 以内で連結する連結成分へ分割
+        # 近接性規則 (max_step=4) で連結する局所系列へ分割
         comps = []
         cur_comp = [pos_list[0]]
         for p in pos_list[1:]:
@@ -2176,6 +2177,31 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
             if len(comp) < 2:
                 continue
 
+            # 規則1: 語間組織化の原則 (Meschonnic p. 168: "unissant des signifiants les uns aux autres")
+            # 同一語内部の音節間 (例: vi-vants) のみの反復はプロゾディー連鎖とみなさない
+            word_indices = {counted[p]["word_idx"] for p in comp}
+            if len(word_indices) < 2:
+                continue
+
+            # 規則2: 弱勢単音節機能語 (DET, ADP, PRON, CCONJ, SCONJ) の適正化
+            # 同一小辞の並列反復 (sans... sans...) または直近の実詞との連接でない限り、孤立小辞を強勢化しない
+            valid_comp = []
+            for p in comp:
+                s = counted[p]
+                is_tool = s["pos"] in ("DET", "ADP", "PRON", "CCONJ", "SCONJ") and len(s["word_text"]) <= 3
+                if is_tool:
+                    has_adj = any(abs(p - po) <= 1 for po in comp if po != p)
+                    has_same_tool = any(counted[po]["word_lower"] == s["word_lower"] for po in comp if po != p)
+                    if has_adj or has_same_tool:
+                        valid_comp.append(p)
+                else:
+                    valid_comp.append(p)
+
+            if len(valid_comp) >= 2 and len({counted[p]["word_idx"] for p in valid_comp}) >= 2:
+                comp = valid_comp
+            else:
+                continue
+
             words_spanned = [f"s{p + 1}:{counted[p]['orth']}" for p in comp]
 
             chain_obj = {
@@ -2188,8 +2214,10 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
             }
             active_chains.append(chain_obj)
             for p in comp:
-                if c not in syl_triggers[p]:
-                    syl_triggers[p].append(c)
+                # 語末母音後アトーン女性音節 (e caduc post-tonique) は構造的弱音節のため強勢化させない
+                if not counted[p].get("is_post_tonic_fem"):
+                    if c not in syl_triggers[p]:
+                        syl_triggers[p].append(c)
 
     # 2. 局所強化されたリエゾン子音 (p. 139 原則非強勢 / p. 182 cousent...des‿enfants のみ局所連鎖で活性化)
     for idx in range(n_c):
@@ -2574,11 +2602,11 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
                 marks.append("⏓")
                 accent_origins.append("R")
                 mark_subtypes.append("D")
-            elif has_prosodic_chain:
+            elif has_prosodic_chain and not s.get("is_post_tonic_fem"):
                 marks.append("⏑ˈ")
                 accent_origins.append("P")
                 mark_subtypes.append("P")
-            elif is_fixed_metric_pos:
+            elif is_fixed_metric_pos and not s.get("is_post_tonic_fem"):
                 marks.append("—")
                 accent_origins.append("M")
                 mark_subtypes.append("M")
@@ -2599,6 +2627,7 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
             line_syntax_conflicts += 1
 
         # 3. 反アクセント (Contre-accents: 隣接する有標音節の累積番号 1, 2, ..., L と休止跨ぎリガチャー ⁀, pp. 152-155, 165)
+        # 反アクセントは異なる語間 (trans-lexical) の強勢衝突であり、同一語内音節同士の衝突は計上しない
         contre_nums = [None] * n_c
         ligature_after = [False] * n_c
         line_contre_events = []
@@ -2617,6 +2646,8 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
                             pos_k = run_start + offset
                             contre_nums[pos_k] = offset + 1
                             if offset < run_len - 1:
+                                if counted[pos_k]["word_idx"] == counted[pos_k + 1]["word_idx"]:
+                                    continue
                                 o1 = accent_origins[pos_k]
                                 o2 = accent_origins[pos_k + 1]
                                 pair_code = f"{o1}-{o2}"
