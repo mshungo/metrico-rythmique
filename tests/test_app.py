@@ -22,7 +22,7 @@ def test_app_with_presets_and_short_text():
     preset_sb = at.sidebar.selectbox[0]
     preset_sb.set_value(preset_sb.options[1]).run()
     assert not at.exception
-    assert len(at.tabs) == 6
+    assert len(at.tabs) == 5
     assert len(at.metric) >= 10
 
     # サンプル2（脱古典セジュール・送り語）を選択し、分音オプションをON
