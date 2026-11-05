@@ -119,6 +119,22 @@ SAMPLE_TEXTS = {
         "Qu’on appelle rouleurs éternels de victimes,\n"
         "Dix nuits, sans regretter l’oeil niais des falots !"
     ),
+    "5. Louise Labé : Sonnet VIII (Décasyllabes 10v 4//6 & e post-vocalique)": (
+        "Je vis, je meurs : je me brûle et me noie.\n"
+        "J'ai chaud extrême en endurant froidure :\n"
+        "La vie m'est et trop molle et trop dure.\n"
+        "J'ai grands ennuis entremêlés de joie.\n\n"
+        "Tout à un coup je ris et je larmoie,\n"
+        "Et en plaisir maint grief tourment j'endure :\n"
+        "Mon bien s'en va, et à jamais il dure :\n"
+        "Tout en un coup je sèche et je verdoie.\n\n"
+        "Ainsi Amour inconstamment me mène :\n"
+        "Et quand je pense avoir plus de douleur,\n"
+        "Sans y penser je me trouve hors de peine.\n\n"
+        "Puis quand je crois ma joie être certaine,\n"
+        "Et être au haut de mon désiré heur,\n"
+        "Il me remet en mon premier malheur."
+    ),
 }
 
 
@@ -325,6 +341,11 @@ with st.sidebar:
         value=True,
         help="Applique les diérèses étymologiques classiques (ex. niais, furieux, passion)."
     )
+    ancient_postvocalic_e = st.checkbox(
+        "Prononciation ancienne / XVIe s. (e post-vocalique : vi-e, joi-e)",
+        value=False,
+        help="Active la prononciation pleine du -e post-vocalique devant consonne (Louise Labé, Ronsard, Du Bellay)."
+    )
 
 up = st.file_uploader("Fichier texte (UTF-8)", type=["txt"])
 default_text = SAMPLE_TEXTS.get(preset_choice, "")
@@ -337,7 +358,13 @@ if not text or not text.strip():
 
 nlp = load_spacy_model()
 with st.spinner("Analyse métrique, rythmique et phonétique en cours..."):
-    res = analyze(text, dierese=dierese, fold_indented=fold_indented, nlp=nlp)
+    res = analyze(
+        text,
+        dierese=dierese,
+        fold_indented=fold_indented,
+        nlp=nlp,
+        ancient_postvocalic_e=ancient_postvocalic_e,
+    )
 ref = load_reference()
 
 rows_data = res["rows"]

@@ -230,3 +230,36 @@ def test_cornulier_s6_f6_and_classical_canon():
     assert res_9["prosody_rhythm"]["lines_detail"][0]["caesura_code"].startswith("4+5")
 
 
+def test_labe_decasyllabe_and_ancient_postvocalic_e():
+    """Louise Labé の古典的十音節詩（4//3+3, horsとのアンシェヌマン, vi-e 古代発音）の厳密検証。"""
+    from prosody_rhythm import _approximate_orth_syllables
+
+    # 1. 'Sans y penser je me trouve hors de peine.' (trouve + hors -> élision/enchaînement, 4 // 3+3)
+    res_hors = analyze("Sans y penser je me trouve hors de peine.", dierese=False)
+    row_hors = res_hors["rows"][0]
+    pr_hors = res_hors["prosody_rhythm"]["lines_detail"][0]
+    assert row_hors["syllables"] == 10
+    assert pr_hors["caesura_code"].startswith("4+6")
+    assert pr_hors["measures_str"] == "4 // 3+3"
+
+    # 2. 'La vie m’est trop molle et trop dure.' (vi-e 古代発音オプション)
+    res_vie = analyze("La vie m’est trop molle et trop dure.", ancient_postvocalic_e=True)
+    pr_vie = res_vie["prosody_rhythm"]["lines_detail"][0]
+    # vie が 2音節 (vi + e) に分割されること
+    vie_toks = [t for t in pr_vie["meschonnic_tokens"] if t["word_text"] == "vie"]
+    assert len(vie_toks) == 2
+    assert [t["orth"] for t in vie_toks] == ["vi", "e"]
+
+    # 3. 音節境界正書法分割の精度検証（単独子音の単離が発生しないこと）
+    assert _approximate_orth_syllables("vie", 2) == ["vi", "e"]
+    assert _approximate_orth_syllables("épée", 3) == ["é", "pé", "e"]
+    assert _approximate_orth_syllables("armée", 3) == ["ar", "mé", "e"]
+    assert _approximate_orth_syllables("joie", 2) == ["joi", "e"]
+    assert _approximate_orth_syllables("bleue", 2) == ["bleu", "e"]
+    assert _approximate_orth_syllables("lion", 2) == ["li", "on"]
+    assert _approximate_orth_syllables("passion", 3) == ["pas", "si", "on"]
+    assert _approximate_orth_syllables("diamant", 3) == ["di", "a", "mant"]
+    assert _approximate_orth_syllables("oublier", 3) == ["ou", "bli", "er"]
+    assert _approximate_orth_syllables("ruine", 3) == ["ru", "i", "ne"]
+
+

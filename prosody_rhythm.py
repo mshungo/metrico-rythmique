@@ -83,6 +83,7 @@ POSTVOCALIC_E_EXEMPT_WORDS = {
 # 標準合音 (synérèse) 固定語彙（古典詩・近代定型詩を通じて原則1音節結合）
 SYNERESE_FIXED = {
     "pied", "pieds", "trépied", "assied", "sied", "ciel", "cieux", "miel", "fiel", "fier", "fiers", "fière", "fières",
+    "grief", "griefs", "bref", "brefs", "brièvement",
     "vierge", "vierges", "tiers", "pitié", "amitié", "moitié", "bien", "biens", "combien", "rien",
     "mien", "miens", "mienne", "miennes", "tien", "tiens", "tienne", "tiennes", "sien", "siens", "sienne", "siennes",
     "chien", "chiens", "chienne", "chrétien", "chrétiens", "chrétienne", "soutien", "entretien", "maintien",
@@ -569,6 +570,7 @@ def build_line_syllable_stream(
     dierese=False,
     is_free_verse_hint=False,
     word_dierese_overrides=None,
+    ancient_postvocalic_e=False,
 ):
     """1詩行のトークン列から、詩法上の音節列・e caduc状態・CPMFタグ・母音衝突・分音情報を精密構築する。"""
     v_words = _prepare_verse_tokens(doc, fallback_ws=ws)
@@ -665,15 +667,25 @@ def build_line_syllable_stream(
                 })
             else:
                 if is_postvoc_e and (not nxt_starts_v or has_plural_guard):
-                    # 母音後 -e/-es/-ent の非エリジオン: 音声上アポコープ（0音節）として処理しつつ古典詩法違反を記録 (例: Choient, des arbres... / La joie venait...)
-                    realize_final_schwa = False
-                    e_caduc_events.append({
-                        "word": w_text,
-                        "word_idx": w_i,
-                        "status": "apocope_postvocalique",
-                        "label": "母音後-e非エリジオン（古典詩法禁止・近代アポコープ）",
-                        "counted": False,
-                    })
+                    if ancient_postvocalic_e:
+                        realize_final_schwa = True
+                        e_caduc_events.append({
+                            "word": w_text,
+                            "word_idx": w_i,
+                            "status": "postvocalique_maintenu_ancien",
+                            "label": "母音後-e古代保持・音節算入 (XVIe s. / poésie ancienne : vi-e, joi-e)",
+                            "counted": True,
+                        })
+                    else:
+                        # 母音後 -e/-es/-ent の非エリジオン: 音声上アポコープ（0音節）として処理しつつ古典詩法違反を記録 (例: Choient, des arbres... / La joie venait...)
+                        realize_final_schwa = False
+                        e_caduc_events.append({
+                            "word": w_text,
+                            "word_idx": w_i,
+                            "status": "apocope_postvocalique",
+                            "label": "母音後-e非エリジオン（古典詩法禁止・近代アポコープ）",
+                            "counted": False,
+                        })
                 elif nxt_starts_v and not has_plural_guard:
                     e_caduc_events.append({
                         "word": w_text,
@@ -862,34 +874,99 @@ def _find_hyphen_boundary_syl_idx(w_lower, total_syls, has_realized_fem):
 
 
 def _approximate_orth_syllables(word_text, n_syl):
-    """表示用に正書法文字列を音節数 n_syl 個の断片へ近似分割する。"""
-    if n_syl <= 1:
+    """表示用に正書法文字列を音節数 n_syl 個の断片へ精密分割する。
+    分音・母音後e・子音群（muta cum liquida、二重子音）の音節境界規則に完全準拠。
+    """
+    if n_syl <= 1 or not word_text:
         return [word_text]
-    matches = list(re.finditer(r"[aeiouyàâäéèêëîïôöûùüœæ]+", word_text, flags=re.IGNORECASE))
-    if len(matches) < n_syl:
-        step = max(1, len(word_text) // n_syl)
-        chunks = [word_text[i * step:(i + 1) * step] for i in range(n_syl - 1)]
-        chunks.append(word_text[(n_syl - 1) * step:])
+    w = word_text
+
+    # 末尾の句読点等の退避
+    m_p = re.search(r"([.,;:!?—–\s]+)$", w)
+    trailing_punct = m_p.group(1) if m_p else ""
+    w_core = w[:-len(trailing_punct)] if trailing_punct else w
+
+    VOWEL_LETTERS_STR = "aeiouyàâäéèêëîïôöûùüœæ"
+    v_pattern = f"[{VOWEL_LETTERS_STR}]+"
+    v_matches = list(re.finditer(v_pattern, w_core, flags=re.IGNORECASE))
+
+    if len(v_matches) < n_syl:
+        # 分音や母音後e等で母音塊数より音節数が多い場合、母音連続を音節核へ分離
+        split_candidates = [
+            # 1. 語末母音後 e/es (vie, joie, épée, bleues, vraie)
+            rf"(?<=[{VOWEL_LETTERS_STR}])(?=es?$)",
+            # 2. i + 語末動詞・名詞語尾 (oublier, étions, lion, violon)
+            r"(?<=[iï])(?=(?:er|ez|ons|ent)$)",
+            # 3. i + 母音 (diamant, passion, niais, suicide, violent)
+            r"(?<=[iï])(?=[aouàâäéèêôöûùü])",
+            # 4. u + 母音 (ruine, nuage, sueur, duel, cruel)
+            r"(?<=[uü])(?=[aouàâäéèêëiîï])",
+            # 5. é/è/ê + 母音 (création, poète)
+            r"(?<=[éèêë])(?=[aiou])",
+            r"(?<=[ao])(?=[éèêë])",
+            # 6. その他の母音連続
+            rf"(?<=[{VOWEL_LETTERS_STR}])(?=[{VOWEL_LETTERS_STR}])",
+        ]
+        w_expanded = w_core
+        needed = n_syl - len(v_matches)
+        for cand in split_candidates:
+            if needed <= 0:
+                break
+            new_w, count = re.subn(cand, "§", w_expanded, count=needed, flags=re.IGNORECASE)
+            if count > 0:
+                needed -= count
+                w_expanded = new_w
+
+        parts = w_expanded.split("§")
+        curr_pos = 0
+        v_spans = []
+        for p in parts:
+            for vm in re.finditer(v_pattern, p, flags=re.IGNORECASE):
+                v_spans.append((curr_pos + vm.start(), curr_pos + vm.end()))
+            curr_pos += len(p)
+    else:
+        v_spans = [(m.start(), m.end()) for m in v_matches]
+        # 母音塊が音節数より多い場合（語末無音eや合音）
+        while len(v_spans) > n_syl:
+            if v_spans[-1][1] == len(w_core) and w_core[v_spans[-1][0]:v_spans[-1][1]].lower() in ("e", "es", "ent"):
+                v_spans.pop()
+            else:
+                min_dist = 999
+                merge_idx = 0
+                for i in range(len(v_spans) - 1):
+                    d = v_spans[i + 1][0] - v_spans[i][1]
+                    if d < min_dist:
+                        min_dist = d
+                        merge_idx = i
+                v_spans[merge_idx] = (v_spans[merge_idx][0], v_spans[merge_idx + 1][1])
+                v_spans.pop(merge_idx + 1)
+
+    if len(v_spans) != n_syl:
+        step = max(1, len(w_core) // n_syl)
+        chunks = [w_core[i * step:(i + 1) * step] for i in range(n_syl - 1)]
+        chunks.append(w_core[(n_syl - 1) * step:] + trailing_punct)
         return chunks
+
     cuts = [0]
     for idx in range(n_syl - 1):
-        m_curr = matches[idx]
-        m_next = matches[idx + 1]
-        mid_start = m_curr.end()
-        mid_end = m_next.start()
-        if mid_end <= mid_start:
-            cut = mid_start
-        elif mid_end - mid_start == 1:
-            cut = mid_start
+        v1_end = v_spans[idx][1]
+        v2_start = v_spans[idx + 1][0]
+        c_len = v2_start - v1_end
+        if c_len <= 0:
+            cuts.append(v1_end)
+        elif c_len == 1:
+            cuts.append(v1_end)
         else:
-            cut = mid_end - 1
-            if mid_end - mid_start >= 2 and word_text[mid_end - 2:mid_end].lower() in {
-                "pr", "br", "tr", "dr", "cr", "gr", "fr", "vr", "pl", "bl", "cl", "gl", "fl", "ch", "ph", "th", "gn", "qu"
-            }:
-                cut = mid_end - 2
-        cuts.append(cut)
-    cuts.append(len(word_text))
-    return [word_text[cuts[i]:cuts[i + 1]] for i in range(n_syl)]
+            c_str = w_core[v1_end:v2_start].lower()
+            if c_str[-2:] in ("pr", "br", "tr", "dr", "cr", "gr", "fr", "vr", "pl", "bl", "cl", "gl", "fl", "ch", "ph", "th", "gn", "qu"):
+                cuts.append(v2_start - 2)
+            else:
+                cuts.append(v1_end + 1)
+    cuts.append(len(w_core))
+    res = [w_core[cuts[i]:cuts[i + 1]] for i in range(n_syl)]
+    if trailing_punct:
+        res[-1] += trailing_punct
+    return res
 
 
 def _compute_word_cpmf_tags(tok, nxt_tok, n_syl, has_realized_fem, hyphen_cut_idx=None):
@@ -3019,18 +3096,18 @@ def _is_valid_regular_alexandrine(corn_row):
     return False
 
 
-def _resolve_line_stream_with_metrical_pressure(ws, doc, lp, dierese, target_meter=12):
+def _resolve_line_stream_with_metrical_pressure(ws, doc, lp, dierese, target_meter=12, ancient_postvocalic_e=False):
     """Cornulier のメトリック圧力原理に基づき、定型詩行における語源的分音 (niais, million, passion 等) および
-    揺れ語彙 (anciens, hier, miasmes, alcool 等) の音節価を最適解決する。
+    揺れ語彙 (anciens, hier, miasmes, alcool 等)、母音後 -e の音節価を最適解決する。
     """
-    stream_poetic = build_line_syllable_stream(ws, doc, lp, dierese=True)
+    stream_poetic = build_line_syllable_stream(ws, doc, lp, dierese=True, ancient_postvocalic_e=ancient_postvocalic_e)
     corn_poetic = analyze_cornulier_line(stream_poetic)
 
     if dierese:
         chosen_stream = stream_poetic
         chosen_corn = corn_poetic
     else:
-        stream_colloq = build_line_syllable_stream(ws, doc, lp, dierese=False)
+        stream_colloq = build_line_syllable_stream(ws, doc, lp, dierese=False, ancient_postvocalic_e=ancient_postvocalic_e)
         corn_colloq = analyze_cornulier_line(stream_colloq)
         # 口語合音では非定型 (例: 11v) だが古典詩法分音を適用すると厳密な定型詩行 (12v 6+6 やコーパス主軸メートル) が成立する場合は定型分音を採用
         if corn_colloq["anatonic_length"] != target_meter and corn_poetic["anatonic_length"] == target_meter:
@@ -3044,6 +3121,26 @@ def _resolve_line_stream_with_metrical_pressure(ws, doc, lp, dierese, target_met
             chosen_stream = stream_colloq
             chosen_corn = corn_colloq
 
+    # 母音後 -e (vie, joie, épée, bleues 等) の古代音節価による定型解決 (9v -> 10v 4+6, 11v -> 12v 6+6 等)
+    if not ancient_postvocalic_e and chosen_corn["anatonic_length"] == (target_meter - 1):
+        v_words = chosen_stream["verse_words"]
+        has_postvoc_inside = any(
+            _is_postvocalic_feminine(vw.text, vw.pos_) for vw in v_words[:-1]
+        )
+        if has_postvoc_inside:
+            base_dierese = True if chosen_stream is stream_poetic else dierese
+            cand_stream = build_line_syllable_stream(
+                ws, doc, lp, dierese=base_dierese, ancient_postvocalic_e=True
+            )
+            cand_corn = analyze_cornulier_line(cand_stream)
+            if cand_corn["anatonic_length"] == target_meter:
+                if target_meter == 10 and cand_corn["caesura_code"].startswith(("4+6", "4/6", "4//6")):
+                    return cand_stream
+                elif target_meter == 12 and _is_valid_regular_alexandrine(cand_corn):
+                    return cand_stream
+                elif target_meter == 8:
+                    return cand_stream
+
     # 揺れ語彙 (anciens, hier, miasmes, alcool 等) によって 13v (target+1) または 11v (target-1) になっている場合の文脈解決
     if chosen_corn["anatonic_length"] in (target_meter + 1, target_meter - 1):
         v_words = chosen_stream["verse_words"]
@@ -3054,7 +3151,9 @@ def _resolve_line_stream_with_metrical_pressure(ws, doc, lp, dierese, target_met
                 base_mode = True if chosen_stream is stream_poetic else dierese
                 overrides = {idx: base_mode for idx in range(len(v_words))}
                 overrides[w_i] = want_dierese
-                cand_stream = build_line_syllable_stream(ws, doc, lp, dierese=base_mode, word_dierese_overrides=overrides)
+                cand_stream = build_line_syllable_stream(
+                    ws, doc, lp, dierese=base_mode, word_dierese_overrides=overrides, ancient_postvocalic_e=ancient_postvocalic_e
+                )
                 cand_corn = analyze_cornulier_line(cand_stream)
                 if cand_corn["anatonic_length"] == target_meter and (target_meter != 12 or _is_valid_regular_alexandrine(cand_corn)):
                     return cand_stream
@@ -3065,7 +3164,7 @@ def _resolve_line_stream_with_metrical_pressure(ws, doc, lp, dierese, target_met
 # Top-Level Orchestrator (4理論統合エントリポイント)
 # =============================================================================
 
-def analyze_prosody_and_rhythm(lines_meta, docs, unit_words, line_phonetics_list, dierese=False):
+def analyze_prosody_and_rhythm(lines_meta, docs, unit_words, line_phonetics_list, dierese=False, ancient_postvocalic_e=False):
     """Cornulier, Meschonnic & Dessons, Di Cristo, Gouvard/Mazaleyrat/Plénat の4大理論を統合実行し構造化辞書を返す。"""
     if not lines_meta:
         return {
@@ -3086,7 +3185,7 @@ def analyze_prosody_and_rhythm(lines_meta, docs, unit_words, line_phonetics_list
 
     # 事前プローブでコーパス主軸メートル（12, 10, 8音節等）を推定
     probe_streams = [
-        build_line_syllable_stream(ws, doc, lp, dierese=True)
+        build_line_syllable_stream(ws, doc, lp, dierese=True, ancient_postvocalic_e=ancient_postvocalic_e)
         for ws, doc, lp in zip(unit_words, docs, line_phonetics_list)
     ]
     probe_lengths = [s["anatonic_count"] for s in probe_streams if s["anatonic_count"] > 0]
@@ -3098,7 +3197,7 @@ def analyze_prosody_and_rhythm(lines_meta, docs, unit_words, line_phonetics_list
 
     # 第1パス: メトリック圧力解決を伴う各行の音節ストリーム構築
     line_streams = [
-        _resolve_line_stream_with_metrical_pressure(ws, doc, lp, dierese=dierese, target_meter=target_meter)
+        _resolve_line_stream_with_metrical_pressure(ws, doc, lp, dierese=dierese, target_meter=target_meter, ancient_postvocalic_e=ancient_postvocalic_e)
         for ws, doc, lp in zip(unit_words, docs, line_phonetics_list)
     ]
     verse_words_list = [stream["verse_words"] for stream in line_streams]

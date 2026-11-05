@@ -34,7 +34,7 @@ ARTICLES = {
 }
 
 # ---------- 音節（規則ベースの近似） ----------
-def _groups(w, dierese=False):
+def _groups(w, dierese=False, ancient_postvocalic_e=False):
     w = normalize_french_orthography(w.lower())
     if w in ("pays", "paysan", "paysans", "paysage", "paysages"):
         w = w.replace("ay", "ai-i")
@@ -51,6 +51,8 @@ def _groups(w, dierese=False):
     w = re.sub(r"([aeiou])([ïëü])", r"\1-\2", w)
     w = re.sub(r"(é)([aiouàâéèêô])", r"\1-\2", w)
     w = re.sub(r"([aoiu])(é)", r"\1-\2", w)
+    if ancient_postvocalic_e:
+        w = re.sub(r"(?<=[aeiouyàâäéèêëîïôöûùüœæ])(?=es?$)", "-", w)
     if dierese:
         # 標準合音語（ciel, bien, rien, vient, pied, dieu, nuit, bruit, lui, suis, puis 等）は分音しない
         syn_protect = {
@@ -70,7 +72,7 @@ def _groups(w, dierese=False):
     return re.findall(f"[{VOWELS}]+", w)
 
 def mute_final(w, pos=None, dierese=False):
-    """語末のeが無音か。"""
+    """語末のeが無音子音節か（table, femme等の無音e減算用）。"""
     w_norm = normalize_french_orthography(w.lower())
     w_clean = re.sub(r"qu", "q", w_norm)
     w_clean = re.sub(r"gu(?=[eéèêiy])", "g", w_clean)
@@ -82,12 +84,12 @@ def mute_final(w, pos=None, dierese=False):
         return True
     return False
 
-def word_syllables(w, pos=None, dierese=False):
+def word_syllables(w, pos=None, dierese=False, ancient_postvocalic_e=False):
     """語末の無音eを数えない音節数。"""
     n = 0
     parts = [p for p in re.split(r"['’\-]", w.lower()) if p]
     for i, p in enumerate(parts):
-        g = len(_groups(p, dierese=dierese))
+        g = len(_groups(p, dierese=dierese, ancient_postvocalic_e=ancient_postvocalic_e))
         if g == 0:
             continue
         if mute_final(p, pos if i == len(parts) - 1 else None, dierese=dierese):
@@ -95,11 +97,11 @@ def word_syllables(w, pos=None, dierese=False):
         n += max(g, 1)
     return n
 
-def line_syllables(words, dierese=False):
+def line_syllables(words, dierese=False, ancient_postvocalic_e=False):
     """詩法に沿った近似：語末の無音eは次の語が子音（または有音h）で始まるときだけ数え、行末では数えない。"""
     if not words:
         return 0
-    n = sum(word_syllables(t.text, t.pos_, dierese=dierese) for t in words)
+    n = sum(word_syllables(t.text, t.pos_, dierese=dierese, ancient_postvocalic_e=ancient_postvocalic_e) for t in words)
     for t, nxt in zip(words, words[1:]):
         nxt_low = nxt.text.lower().strip("’'")
         nxt_is_vowel = (nxt_low[:1] in VOWEL_START) and (nxt_low not in H_ASPIRE)
@@ -159,7 +161,7 @@ def parse_text(text, fold_indented=False):
     return lines
 
 # ---------- 共通指標計算 ----------
-def compute_corpus_metrics(docs, unit_words_list=None, dierese=False):
+def compute_corpus_metrics(docs, unit_words_list=None, dierese=False, ancient_postvocalic_e=False):
     """docs（文または行ごとの Doc リスト）から各種指標を算出する。
     unit_words_list: 各単位の単語トークンリストのリスト（None の場合は docs から抽出）。
     """
@@ -182,7 +184,7 @@ def compute_corpus_metrics(docs, unit_words_list=None, dierese=False):
     tenses = collections.Counter(tense_label(t) for t in finite)
     content = [t for t in words if t.pos_ in ("NOUN", "VERB", "ADJ", "ADV") and t.text.isalpha()]
     zipfs = [zipf_frequency(t.lower_, "fr") for t in content]
-    wsyl = [word_syllables(t.text, t.pos_, dierese=dierese) for t in words if any(c.isalpha() for c in t.text)]
+    wsyl = [word_syllables(t.text, t.pos_, dierese=dierese, ancient_postvocalic_e=ancient_postvocalic_e) for t in words if any(c.isalpha() for c in t.text)]
     forms = [t.lower_ for t in words]
 
     # MATTR（100語以上のときのみ計算、100語未満は None）
@@ -352,7 +354,7 @@ def detect_patterns(lines, docs):
     }
 
 # ---------- 分析メイン ----------
-def analyze(text, dierese=False, fold_indented=False, nlp=None):
+def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvocalic_e=False):
     """詩テクストを解析し、行データ・指標・定型句・音素分析（IPA・リエゾン・偏差）などを返す。"""
     if nlp is None:
         nlp = get_nlp()
@@ -377,7 +379,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
                 "all_liaisons": [],
                 "total_liaisons": 0,
             },
-            "prosody_rhythm": analyze_prosody_and_rhythm([], [], [], [], dierese=dierese),
+            "prosody_rhythm": analyze_prosody_and_rhythm([], [], [], [], dierese=dierese, ancient_postvocalic_e=ancient_postvocalic_e),
         }
 
     docs = list(nlp.pipe([l["text"] for l in lines]))
@@ -398,7 +400,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
 
     # 4大理論統合・韻律リズム分析 (Cornulier / Meschonnic / Di Cristo / Gouvard)
     pr_result = analyze_prosody_and_rhythm(
-        lines, docs, unit_words, line_phonetics_list, dierese=dierese
+        lines, docs, unit_words, line_phonetics_list, dierese=dierese, ancient_postvocalic_e=ancient_postvocalic_e
     )
     pr_lines = pr_result["lines_detail"]
 
@@ -416,7 +418,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
             "anatonic_syllables": pr_l["anatonic_syllables"],
             "words": len(ws),
             "has_finite_verb": any(is_finite(t) for t in ws),
-            "feminine": mute_final(ws[-1].text, ws[-1].pos_, dierese=dierese) if ws else False,
+            "feminine": prosody_rhythm._has_final_post_tonic_e(ws[-1].text, ws[-1].pos_) if ws else False,
             "capital": next((c for c in l["text"] if c.isalpha()), "").isupper(),
             "ends_function_word": bool(ws) and ws[-1].pos_ in ("DET", "ADP", "CCONJ", "SCONJ"),
             "meter_code": pr_l["meter_code"],
@@ -444,7 +446,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None):
             "function_words": func_in_line,
         })
 
-    computed = compute_corpus_metrics(docs, unit_words_list=unit_words, dierese=dierese)
+    computed = compute_corpus_metrics(docs, unit_words_list=unit_words, dierese=dierese, ancient_postvocalic_e=ancient_postvocalic_e)
     metrics = computed["metrics"]
     tense_share = computed["tense_share"]
     words = computed["words"]

@@ -45,3 +45,13 @@ def test_app_with_presets_and_short_text():
     assert len(at.multiselect) >= 1
     # スキャンション表示においてアクセント（mesch-stacked）を含む HTML が描画されること
     assert any("mesch-stacked" in h.value for h in at.html)
+
+
+def test_app_labe_preset():
+    """サンプル5（Louise Labé : Sonnet VIII 十音節詩）が例外なく描画されること。"""
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    preset_sb = at.sidebar.selectbox[0]
+    preset_sb.set_value(preset_sb.options[5]).run()
+    assert not at.exception
+    assert len(at.tabs) == 5

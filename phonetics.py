@@ -27,7 +27,7 @@ H_ASPIRE = {
     "hisser", "hisse", "hissent", "hobereau", "hochement", "hocher", "hochet",
     "holà", "hollande", "homard", "homards", "hongrie", "honnir", "honni",
     "honte", "hontes", "honteux", "honteuse", "honteusement", "hoquet",
-    "horde", "hordes", "hors", "hotte", "houblon", "houe", "houille", "houle",
+    "horde", "hordes", "hotte", "houblon", "houe", "houille", "houle",
     "houleux", "houleuse", "houlette", "houp", "houppe", "hourra", "house",
     "housses", "housse", "houx", "hublot", "hublots", "huche", "huée", "huées",
     "huer", "huguenot", "huguenots", "huit", "huitième", "huitaines", "hulotte",
@@ -73,6 +73,7 @@ LEXICON = {
     # 前置詞・接続詞
     "dans": ("dɑ̃", "z"), "sans": ("sɑ̃", "z"), "sous": ("su", "z"), "sur": ("syʁ", None),
     "par": ("paʁ", None), "pour": ("puʁ", None), "avec": ("avɛk", None), "chez": ("ʃe", "z"),
+    "hors": ("ɔʁ", "z"),
     "vers": ("vɛʁ", "z"), "avant": ("avɑ̃", "t"), "après": ("apʁɛ", "z"),
     "entre": ("ɑ̃tʁ", None), "contre": ("kɔ̃tʁ", None), "pendant": ("pɑ̃dɑ̃", "t"),
     "depuis": ("dəpɥi", "z"), "selon": ("səlɔ̃", None),
