@@ -43,3 +43,5 @@ def test_app_with_presets_and_short_text():
     assert not at.exception
     # 音素追跡 multiselect および推移チャートが例外なく描画されること
     assert len(at.multiselect) >= 1
+    # スキャンション表示においてアクセント（mesch-stacked）を含む HTML が描画されること
+    assert any("mesch-stacked" in h.value for h in at.html)

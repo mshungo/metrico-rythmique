@@ -129,6 +129,22 @@ def load_spacy_model():
     return spacy.load("fr_core_news_md")
 
 
+def format_scansion_mark_html(mark: str) -> str:
+    """Rendu typographique de la scansion : place l'accent prosodique verticalement au-dessus de la brève."""
+    if not mark:
+        return "&nbsp;"
+    if "⏑ˈ" in mark or "◡ˈ" in mark:
+        is_paren = mark.startswith("(") and mark.endswith(")")
+        stacked = (
+            '<span class="mesch-stacked">'
+            '<span class="mesch-stacked-top">ˈ</span>'
+            '<span class="mesch-stacked-base">⏑</span>'
+            '</span>'
+        )
+        return f"({stacked})" if is_paren else stacked
+    return html.escape(mark)
+
+
 def render_scansion_html(mesch_lines, dom_consonants):
     """Rendu visuel de la scansion syllabique et accentuelle par vers."""
     dom_set = {d["consonant"] for d in dom_consonants[:3]}
@@ -146,7 +162,10 @@ def render_scansion_html(mesch_lines, dom_consonants):
         .mesch-ext .mesch-orth { font-style: italic; color: #64748b; }
         .mesch-ext .mesch-mark { font-size: 0.85rem; color: #94a3b8; min-height: 18px; }
         .mesch-sup { font-size: 0.70rem; font-weight: 700; color: #dc2626; min-height: 14px; }
-        .mesch-mark { font-size: 1.05rem; font-weight: 700; color: #0f172a; line-height: 1.2; }
+        .mesch-mark { font-size: 1.05rem; font-weight: 700; color: #0f172a; line-height: 1.2; min-height: 22px; display: inline-flex; align-items: center; justify-content: center; }
+        .mesch-stacked { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; position: relative; top: -1px; }
+        .mesch-stacked-top { font-size: 0.65rem; line-height: 0.45; margin-bottom: -1px; font-weight: 900; color: #0f172a; }
+        .mesch-stacked-base { font-size: 1.05rem; line-height: 0.9; color: #0f172a; }
         .mesch-orth { font-size: 0.88rem; color: #1e293b; margin-top: 2px; }
         .mesch-ipa { font-size: 0.74rem; color: #64748b; }
         .mesch-echo { color: #be185d; font-weight: 700; }
@@ -174,11 +193,11 @@ def render_scansion_html(mesch_lines, dom_consonants):
             ipa_cls = "mesch-ipa mesch-echo" if has_dom_echo else "mesch-ipa"
             orth_esc = html.escape(tok["orth"] + (tok["punct_after"] or ""))
             ipa_esc = html.escape(tok["ipa"])
-            mark_esc = html.escape(tok["mark"]) if tok["mark"] else "&nbsp;"
+            mark_html = format_scansion_mark_html(tok.get("mark"))
             cells_html.append(
                 f'<div class="mesch-cell {cls}">'
                 f'<span class="mesch-sup">{html.escape(sup_txt)}</span>'
-                f'<span class="mesch-mark">{mark_esc}</span>'
+                f'<span class="mesch-mark">{mark_html}</span>'
                 f'<span class="mesch-orth">{orth_esc}</span>'
                 f'<span class="{ipa_cls}">[{ipa_esc}]</span>'
                 f'</div>'
@@ -402,7 +421,20 @@ with tab_vers:
     st.dataframe(lines_detail_df[master_cols].rename(columns=master_rename), width="stretch", hide_index=True)
 
     st.subheader("Scansion rythmique et découpage syllabique")
-    st.caption("Légende : `—` Accent tonique / métrique ｜ `⏓` Accent expressif ｜ `⏑ˈ` Accent prosodique (écho phonématique) ｜ `◡` Syllabe atone ｜ `│` Césure ｜ Rose : Écho consonantique dominant")
+    st.html(
+        '<div style="font-size:0.85rem; color:#64748b; margin-bottom:10px;">'
+        '<strong>Légende :</strong> '
+        '<code style="font-weight:700;">—</code> Accent tonique / métrique ｜ '
+        '<code style="font-weight:700;">⏓</code> Accent expressif ｜ '
+        '<span style="background:#f1f5f9; padding:1px 5px; border-radius:4px; font-family:monospace; font-weight:700; display:inline-flex; flex-direction:column; align-items:center; vertical-align:middle; line-height:1; position:relative; top:-2px;">'
+        '<span style="font-size:0.65em; line-height:0.45; margin-bottom:-1px; color:#0f172a;">ˈ</span>'
+        '<span style="font-size:1em; line-height:0.9; color:#0f172a;">⏑</span>'
+        '</span> Accent prosodique (écho phonématique) ｜ '
+        '<code style="font-weight:700;">◡</code> Syllabe atone ｜ '
+        '<code style="font-weight:700;">│</code> Césure ｜ '
+        '<span style="color:#be185d; font-weight:700;">Rose</span> : Écho consonantique dominant'
+        '</div>'
+    )
     st.html(render_scansion_html(mesch["lines"], mesch["dominant_consonant_series"]))
 
     with st.expander("Inspecteur détaillé d'un vers (Zoom métrique et rythmique)", expanded=False):
