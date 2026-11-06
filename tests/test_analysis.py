@@ -220,20 +220,19 @@ La mer, la mer, toujours recommencée !"""
     all_pats = patterns["all_patterns"]
     assert len(all_pats) > 0
 
-    # V1 の [s] アリテラシオンが検出されていること（sont, ces, serpents, sifflent, sur）
+    # V1 の [s]：実詞 serpents / sifflent のみが算入され、機能語 sont / ces / sur は relais となること
     v1_allit_s = [p for p in all_pats if p["line"] == 1 and p["category"] == "alliteration" and p["motif"] == "[s]"]
-    assert len(v1_allit_s) >= 1
-    assert v1_allit_s[0]["count"] >= 4
-    assert any("serpents" in w or "sifflent" in w for w in v1_allit_s[0]["words_involved"])
+    assert len(v1_allit_s) == 1
+    assert set(v1_allit_s[0]["words_involved"]) == {"serpents", "sifflent"}
 
-    # V1 の [i] アソナンスが検出されていること（qui, qui, sifflent）
+    # 機能語 qui の [i] だけで成立するアソナンスは検出されないこと
     v1_asson_i = [p for p in all_pats if p["line"] == 1 and p["category"] == "assonance" and p["motif"] == "[i]"]
-    assert len(v1_asson_i) >= 1
-    assert v1_asson_i[0]["count"] >= 3
+    assert v1_asson_i == []
 
-    # V3 (Valéry) の [p] アリテラシオン（pins, palpite）
+    # V3 の [p] アリテラシオン（pins, palpite）
     v3_allit_p = [p for p in all_pats if p["line"] == 3 and p["category"] == "alliteration" and p["motif"] == "[p]"]
     assert len(v3_allit_p) >= 1
+    assert v3_allit_p[0]["count"] >= 3
 
     # N-grammes récurrents が抽出されていること
     assert len(patterns["recurrent_ngrams"]) > 0
@@ -249,3 +248,39 @@ La mer, la mer, toujours recommencée !"""
 
 
 
+
+
+def test_lexical_prosodic_series():
+    """実詞を軸としたプロゾディー系列：機能語は relais として算定外、同一語の反復のみでは系列にならないこと。"""
+    poem = """Pour qui sont ces serpents qui sifflent sur vos têtes ?
+Entre les pins palpite, entre les tombes;
+La mer, la mer, toujours recommencée !
+Sans y penser je me trouve hors de peine."""
+    res = analyze(poem)
+    lx = res["lexical_prosody"]
+    assert len(lx["lines"]) == 4
+
+    l1 = lx["lines"][0]
+    s_series = [s for s in l1["series"] if s["phoneme"] == "s"]
+    assert len(s_series) == 1
+    assert s_series[0]["words"] == ["serpents", "sifflent"]
+    relays = {r["word"] for r in s_series[0]["relays"]}
+    assert {"sont", "ces", "sur"} <= relays
+    # 機能語由来の系列（例：qui の [k]）は存在しない
+    assert not any(s["phoneme"] == "k" for s in l1["series"])
+
+    l2 = lx["lines"][1]
+    p_series = [s for s in l2["series"] if s["phoneme"] == "p"]
+    assert p_series and p_series[0]["kind"] == "série" and p_series[0]["compact"]
+
+    # la mer, la mer : [ɛ] は同一語 mer の反復のみ → 系列にしない
+    l3 = lx["lines"][2]
+    assert not any(s["phoneme"] == "ɛ" for s in l3["series"])
+    assert any(s["phoneme"] == "m" and "recommencée" in s["words"] for s in l3["series"])
+
+    # パラダイム：語頭 [p] の pins / palpite / penser / peine
+    p_par = [p for p in lx["paradigms"] if p["phoneme"] == "p"]
+    assert p_par and {"pins", "palpite", "penser", "peine"} <= set(p_par[0]["words"])
+
+    # 空テキスト
+    assert analyze("")["lexical_prosody"]["lines"] == []

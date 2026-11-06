@@ -592,6 +592,228 @@ with tab_rythme:
 # Onglet 3 : Chaînes phonématiques & Recherche IPA
 # -----------------------------------------------------------------------------
 with tab_phon_chain:
+    # =========================================================================
+    # Prosodie des mots pleins : chaînes consonantiques / vocaliques intra-vers
+    # =========================================================================
+    lx = res.get("lexical_prosody", {}) or {}
+    lx_lines = lx.get("lines", [])
+    st.subheader("Prosodie des mots pleins : séries, couplages et paradigmes sonores")
+    st.caption(
+        "Seuls les mots pleins (noms, verbes, adjectifs, adverbes lexicaux) portent les séries. "
+        "Articles, prépositions, pronoms et auxiliaires n'entrent pas dans le calcul : ils apparaissent "
+        "en gris comme simples relais. Poids : attaque initiale 3 · attaque interne 2 · voyelle tonique 2 · "
+        "voyelle atone / coda 1 · bonus de proximité ×1,25 si chaque intervalle ≤ 4 syllabes."
+    )
+
+    if lx_lines:
+        LX_PALETTE = ["#dc2626", "#2563eb", "#059669", "#d97706", "#7c3aed", "#db2777",
+                      "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#be123c", "#0d9488"]
+        lx_color_map = {}
+        for i_d, d in enumerate(lx.get("dominant_series", [])):
+            lx_color_map[d["phoneme"]] = LX_PALETTE[i_d % len(LX_PALETTE)]
+
+        def lx_color(ph):
+            if ph not in lx_color_map:
+                lx_color_map[ph] = LX_PALETTE[len(lx_color_map) % len(LX_PALETTE)]
+            return lx_color_map[ph]
+
+        dens_vals = [ll["prosodic_density"] for ll in lx_lines]
+        best_line = max(lx_lines, key=lambda ll: ll["prosodic_density"])
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Séries / couplages (mots pleins)", sum(ll["series_count"] for ll in lx_lines))
+        m2.metric("Densité prosodique moyenne", f"{sum(dens_vals) / len(dens_vals):.2f}",
+                  help="Somme des poids des séries ÷ nombre de syllabes des mots pleins du vers")
+        m3.metric("Vers le plus dense", f"V{best_line['line']} ({best_line['prosodic_density']:.2f})")
+        dom_txt = " ".join(f"[{d['phoneme']}]" for d in lx.get("dominant_series", [])[:4]) or "—"
+        m4.metric("Séries dominantes", dom_txt)
+
+        # ---------- 1. Notation souscrite d'un vers ----------
+        st.markdown("**Notation souscrite des séries (vers par vers)**")
+        line_opts = [f"V{ll['line']} — {ll['text']}" for ll in lx_lines]
+        default_idx = lx_lines.index(best_line)
+        sel_lbl = st.selectbox("Vers à analyser", line_opts, index=default_idx, key="lx_line_sel")
+        cur = lx_lines[line_opts.index(sel_lbl)]
+        sylls = cur["syllables"]
+        n_s = len(sylls)
+
+        cell = "padding:4px 6px;text-align:center;white-space:nowrap;"
+        h = ["<div style='overflow-x:auto'><table style='border-collapse:collapse;font-family:Georgia,serif;font-size:15px'>"]
+        # rangée des syllabes
+        h.append("<tr><td style='" + cell + "color:#6b7280;font-size:12px;text-align:right'>syllabes</td>")
+        for k, sy in enumerate(sylls):
+            bl = "border-left:2px solid #d1d5db;" if sy["word_start"] and k > 0 else ""
+            br = "border-right:3px double #b91c1c;" if sy["caesura_after"] else ""
+            if sy["lexical"]:
+                sty = "font-weight:700;color:#111827;"
+            else:
+                sty = "color:#9ca3af;font-style:italic;"
+            if sy["ext"]:
+                sty += "opacity:0.55;"
+            h.append(f"<td style='{cell}{bl}{br}{sty}'>{html.escape(sy['orth'])}</td>")
+        h.append("</tr>")
+        # rangée IPA
+        h.append("<tr><td style='" + cell + "color:#6b7280;font-size:12px;text-align:right'>IPA</td>")
+        for k, sy in enumerate(sylls):
+            bl = "border-left:2px solid #d1d5db;" if sy["word_start"] and k > 0 else ""
+            br = "border-right:3px double #b91c1c;" if sy["caesura_after"] else ""
+            col = "#374151" if sy["lexical"] else "#c4c8cf"
+            h.append(f"<td style='{cell}{bl}{br}font-family:monospace;font-size:13px;color:{col}'>{html.escape(sy['ipa'])}</td>")
+        h.append("</tr>")
+        # rangée des accents
+        h.append("<tr><td style='" + cell + "color:#6b7280;font-size:12px;text-align:right'>accents</td>")
+        for k, sy in enumerate(sylls):
+            bl = "border-left:2px solid #d1d5db;" if sy["word_start"] and k > 0 else ""
+            br = "border-right:3px double #b91c1c;" if sy["caesura_after"] else ""
+            h.append(f"<td style='{cell}{bl}{br}font-size:16px;color:#1f2937'>{html.escape(sy['mark'] or '')}</td>")
+        h.append("</tr>")
+        # rangées des séries
+        for s in cur["series"]:
+            colr = lx_color(s["phoneme"])
+            occ_map = {}
+            for o in s["occurrences"]:
+                occ_map.setdefault(o["syl"], o["kind"])
+            relay_set = {r["syl"] for r in s["relays"]}
+            first, last = min(s["positions"]), max(s["positions"])
+            lbl = (f"<b style='color:{colr}'>[{html.escape(s['phoneme'])}]</b> "
+                   f"<span style='font-size:11px;color:#6b7280'>{s['kind']} · {s['score']}</span>")
+            h.append(f"<tr><td style='{cell}text-align:right'>{lbl}</td>")
+            for k in range(n_s):
+                bl = "border-left:2px solid #d1d5db;" if sylls[k]["word_start"] and k > 0 else ""
+                line_bg = (f"background:linear-gradient(to bottom,transparent 46%,{colr}55 46%,{colr}55 58%,transparent 58%);"
+                           if first <= k <= last else "")
+                if k in occ_map:
+                    kind = occ_map[k]
+                    size = "22px" if kind == "attaque_initiale" else "18px"
+                    inner = (f"<span style='display:inline-block;min-width:{size};height:{size};line-height:{size};"
+                             f"border-radius:50%;background:{colr};color:white;font-size:12px;font-family:monospace' "
+                             f"title='{html.escape(sylls[k]['word'])} · {kind}'>{html.escape(s['phoneme'])}</span>")
+                elif k in relay_set:
+                    inner = (f"<span style='display:inline-block;min-width:18px;height:18px;line-height:16px;"
+                             f"border-radius:50%;border:1.5px dashed #9ca3af;color:#9ca3af;background:white;font-size:11px;"
+                             f"font-family:monospace' title='relais grammatical : {html.escape(sylls[k]['word'])}'>"
+                             f"{html.escape(s['phoneme'])}</span>")
+                else:
+                    inner = ""
+                h.append(f"<td style='{cell}{bl}{line_bg}'>{inner}</td>")
+            h.append("</tr>")
+        h.append("</table></div>")
+        st.markdown("".join(h), unsafe_allow_html=True)
+        if not cur["series"]:
+            st.info("Aucune série portée par au moins deux mots pleins distincts dans ce vers.")
+        else:
+            st.caption("● plein : occurrence dans un mot plein (grand = attaque initiale) · ○ pointillé : relais grammatical "
+                       "(non compté) · barre colorée : empan de la série · ‖ rouge : césure.")
+            sd_rows = [{
+                "Série": f"[{s['phoneme']}]",
+                "Type": "consonne" if s["type"] == "C" else "voyelle",
+                "Statut": s["kind"],
+                "Mots pleins": " · ".join(s["words"]),
+                "Occ.": s["n_occ"],
+                "Attaques initiales": s["n_initial_attacks"],
+                "Écart max (syll.)": s["max_gap"],
+                "Proximité ≤ 4": "oui" if s["compact"] else "non",
+                "Poids": s["score"],
+                "Relais grammaticaux": ", ".join(r["word"] for r in s["relays"]) or "—",
+            } for s in cur["series"]]
+            st.dataframe(pd.DataFrame(sd_rows), width="stretch", hide_index=True)
+
+        # ---------- 2. Vue d'ensemble du poème ----------
+        with st.expander("Vue d'ensemble : mots pleins colorés par série dominante", expanded=True):
+            ov = ["<div style='font-family:Georgia,serif;font-size:15px;line-height:1.9'>"]
+            prev_st = None
+            for ll in lx_lines:
+                if prev_st is not None and ll["stanza"] != prev_st:
+                    ov.append("<div style='height:10px'></div>")
+                prev_st = ll["stanza"]
+                word_color = {}
+                for s in ll["series"][:3]:
+                    for w in s["words"]:
+                        word_color.setdefault(w, (s["phoneme"], lx_color(s["phoneme"])))
+                parts = []
+                for w in ll["words"]:
+                    t = html.escape(w["text"])
+                    if not w["lexical"]:
+                        parts.append(f"<span style='color:#b0b5bd'>{t}</span>")
+                    elif w["text"] in word_color:
+                        ph, c = word_color[w["text"]]
+                        parts.append(f"<span style='color:{c};font-weight:700;border-bottom:2px solid {c}' "
+                                     f"title='série [{html.escape(ph)}]'>{t}</span>")
+                    else:
+                        parts.append(f"<span style='color:#111827'>{t}</span>")
+                badges = " ".join(
+                    f"<span style='background:{lx_color(s['phoneme'])};color:white;border-radius:8px;padding:0 6px;"
+                    f"font-family:monospace;font-size:12px'>{html.escape(s['phoneme'])}</span>"
+                    for s in ll["series"][:4]
+                )
+                ov.append(
+                    f"<div><span style='color:#9ca3af;font-size:12px;display:inline-block;width:38px'>V{ll['line']}</span>"
+                    f"{' '.join(parts)} &nbsp; {badges} "
+                    f"<span style='color:#6b7280;font-size:12px'>d={ll['prosodic_density']:.2f}</span></div>"
+                )
+            ov.append("</div>")
+            st.markdown("".join(ov), unsafe_allow_html=True)
+
+        # ---------- 3. Carte des séries et densité ----------
+        mx = pd.DataFrame(lx.get("matrix", []))
+        g1, g2 = st.columns([3, 2])
+        with g1:
+            st.markdown("**Carte vers × phonème (poids des séries portées par les mots pleins)**")
+            if not mx.empty:
+                mx["vers"] = mx["line"]
+                mx["phonème"] = "[" + mx["phoneme"] + "]"
+                order_ph = ["[" + d["phoneme"] + "]" for d in lx.get("dominant_series", [])]
+                order_ph += [p for p in mx["phonème"].unique() if p not in order_ph]
+                heat = alt.Chart(mx).mark_rect(stroke="white", strokeWidth=1).encode(
+                    x=alt.X("vers:O", title="Vers"),
+                    y=alt.Y("phonème:N", sort=order_ph, title=None),
+                    color=alt.Color("score:Q", scale=alt.Scale(scheme="orangered"), title="Poids"),
+                    tooltip=[alt.Tooltip("vers:O", title="Vers"), alt.Tooltip("phonème:N"),
+                             alt.Tooltip("score:Q", title="Poids"), alt.Tooltip("n_occ:Q", title="Occ."),
+                             alt.Tooltip("words:N", title="Mots pleins")],
+                ).properties(height=max(160, 22 * len(order_ph)))
+                st.altair_chart(heat, width="stretch")
+            else:
+                st.info("Aucune série détectée.")
+        with g2:
+            st.markdown("**Densité prosodique par vers**")
+            dens_df = pd.DataFrame([{"vers": ll["line"], "strophe": f"S{ll['stanza']}",
+                                     "densité": ll["prosodic_density"], "dominante": ll["dominant"]} for ll in lx_lines])
+            dens_chart = alt.Chart(dens_df).mark_bar().encode(
+                x=alt.X("vers:O", title="Vers"),
+                y=alt.Y("densité:Q", title="Densité"),
+                color=alt.Color("strophe:N", legend=None),
+                tooltip=["vers", "strophe", "densité", "dominante"],
+            ).properties(height=max(160, 22 * max(1, mx["phonème"].nunique() if not mx.empty else 1)))
+            st.altair_chart(dens_chart, width="stretch")
+
+        # ---------- 4. Paradigmes (sémantique sérielle) ----------
+        paradigms = lx.get("paradigms", [])
+        with st.expander(f"Paradigmes sonores : mots pleins liés par la même attaque initiale ({len(paradigms)})", expanded=False):
+            st.caption("Mots pleins distincts partageant la consonne d'attaque initiale. "
+                       "« Co-présence » : vers où au moins deux de ces mots se rencontrent, lieu privilégié de la sémantique sérielle.")
+            if paradigms:
+                st.dataframe(pd.DataFrame([{
+                    "Attaque": f"[{p['phoneme']}]",
+                    "Mots pleins": " · ".join(p["words"]),
+                    "Nb mots": p["n_words"],
+                    "Occ.": p["n_occ"],
+                    "Vers": ", ".join(f"V{x}" for x in p["lines"]),
+                    "Co-présence": ", ".join(f"V{x}" for x in p["co_lines"]) or "—",
+                } for p in paradigms]), width="stretch", hide_index=True)
+            else:
+                st.info("Aucun paradigme détecté.")
+
+        lx_csv = pd.DataFrame([{
+            "vers": s["line"], "strophe": s["stanza"], "série": s["phoneme"], "type": s["type"], "statut": s["kind"],
+            "mots_pleins": " | ".join(s["words"]), "occurrences": s["n_occ"], "attaques_initiales": s["n_initial_attacks"],
+            "ecart_max": s["max_gap"], "proximite": s["compact"], "poids": s["score"],
+            "relais": " | ".join(r["word"] for r in s["relays"]), "texte": s["text"],
+        } for s in lx.get("series", [])])
+        if not lx_csv.empty:
+            st.download_button("📥 Exporter les séries des mots pleins (CSV)", lx_csv.to_csv(index=False).encode("utf-8"),
+                               file_name="series_mots_pleins.csv", mime="text/csv", key="dl_lx_csv")
+
+    st.divider()
     st.subheader("Chaînes phonématiques & Recherche d'occurrences IPA")
     st.caption("Recherchez tout phonème ou chaîne de phonèmes (ex. [ɔʁ], [wa], [st], [pʁ], [k], [s]) et suivez leur distribution vers par vers.")
 
@@ -1072,8 +1294,8 @@ with tab_phon_chain:
     # Métriques clés en colonnes
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Motifs remarquables", pat_stats.get("total_patterns", 0), help="Nombre total de motifs et récurrences sonores détectés")
-    k2.metric("Allitérations intra-vers", pat_stats.get("total_alliterations", 0), help="Forte concentration de consonnes (>= 3 occ.) dans un même vers")
-    k3.metric("Assonances intra-vers", pat_stats.get("total_assonances", 0), help="Forte répétition de timbres vocaliques (>= 3 occ.) dans un vers")
+    k2.metric("Allitérations intra-vers", pat_stats.get("total_alliterations", 0), help="Consonne portée par au moins deux mots pleins distincts (≥ 3 occ. ou 2 attaques initiales)")
+    k3.metric("Assonances intra-vers", pat_stats.get("total_assonances", 0), help="Timbre vocalique porté par au moins deux mots pleins distincts (≥ 3 occ.)")
     k4.metric("Chaînes & Réseaux", pat_stats.get("total_chains", 0), help="Séries et couplages de consonnes ouvrantes (Meschonnic)")
     k5.metric("Chiasmes & Échos", pat_stats.get("total_echos", 0) + pat_stats.get("total_superlatifs", 0), help="Chiasmes prosodiques, échos initiaux/augmentés et superlatifs")
 

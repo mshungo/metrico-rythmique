@@ -549,7 +549,252 @@ def compute_phoneme_progression_dynamics(track_records, smoothing_window=3):
         "stanza_boundaries": stanza_boundaries,
     }
 
-def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, min_ngram_lines=None):
+# ---------- 実詞軸のプロゾディー（Dessons–Meschonnic） ----------
+LEXICAL_POS = {"NOUN", "PROPN", "VERB", "ADJ", "ADV"}
+# 意味的中心を担わない文法的副詞（否定・程度・代名副詞など）は実詞から除外する
+GRAMMATICAL_ADVS = {
+    "ne", "n'", "n", "pas", "plus", "très", "trop", "si", "aussi", "tant", "moins",
+    "point", "y", "en", "là", "où", "comme", "puis", "alors", "donc", "ainsi", "assez",
+    "fort", "bien", "mieux", "même", "tout", "toute", "tous",
+}
+# 位置による重み：語頭の開子音 > 語中の開子音 > 末尾子音（Traité du rythme : 開子音の優位）
+PROSODIC_WEIGHTS = {
+    "attaque_initiale": 3.0,
+    "attaque_interne": 2.0,
+    "voyelle_tonique": 2.0,
+    "voyelle": 1.0,
+    "coda": 1.0,
+}
+PROSODIC_KIND_FR = {
+    "attaque_initiale": "attaque initiale",
+    "attaque_interne": "attaque interne",
+    "voyelle_tonique": "voyelle tonique",
+    "voyelle": "voyelle atone",
+    "coda": "coda",
+}
+_SERIES_EXCLUDED = {"ʔ", "ə", ""}
+
+
+def _is_lexical_word(text, pos):
+    w = normalize_french_orthography((text or "").lower()).split("'")[-1]
+    if pos not in LEXICAL_POS:
+        return False
+    if pos == "ADV" and w in GRAMMATICAL_ADVS:
+        return False
+    return bool(w)
+
+
+def compute_lexical_prosodic_series(mesch_lines, rows=None):
+    """
+    Dessons–Meschonnic のプロゾディー理論に従い、実詞（名詞・動詞・形容詞・副詞）の音素を軸に
+    1行内の子音・母音系列（couplage / série）を検出する。冠詞・前置詞などの機能語は系列の算定から外し、
+    「文法的中継 (relais)」として別記する。さらに詩全体で語頭開子音を共有する実詞群を
+    「系列的意味作用 (sémantique sérielle)」のパラダイムとして集約する。
+    """
+    rows = rows or []
+    stanza_by_line = {r.get("line"): r.get("stanza", 1) for r in rows}
+    lines_out, matrix, all_series = [], [], []
+    paradigm_map = collections.defaultdict(list)
+
+    for li, m_line in enumerate(mesch_lines or [], 1):
+        line_num = m_line.get("line", li)
+        toks = [t for t in m_line.get("syllable_tokens", [])]
+
+        # 1. 音節を語単位に集約（韻律語 _VerseWord の word_idx に基づく）
+        words, by_idx = [], {}
+        for k, t in enumerate(toks):
+            w_idx = t.get("word_idx")
+            key = w_idx if w_idx is not None else f"x{k}"
+            if key not in by_idx:
+                by_idx[key] = {
+                    "word_idx": w_idx,
+                    "text": t.get("word_text", ""),
+                    "pos": t.get("word_pos", ""),
+                    "syllables": [],
+                }
+                by_idx[key]["lexical"] = _is_lexical_word(by_idx[key]["text"], by_idx[key]["pos"])
+                words.append(by_idx[key])
+            by_idx[key]["syllables"].append(k)
+
+        # 2. 音素出現（位置種別・重みつき）を列挙
+        occurrences = []
+        for w_order, w in enumerate(words):
+            sylls = w["syllables"]
+            tonic = None
+            for k in reversed(sylls):
+                if toks[k].get("nucleus") not in ("ə", "", None):
+                    tonic = k
+                    break
+            for j, k in enumerate(sylls):
+                t = toks[k]
+                is_ext = t.get("syl_idx") is None
+                prev_coda = list(toks[k - 1].get("coda_cons") or []) if (is_ext and k > 0) else []
+                for c in t.get("onset_cons", []) or []:
+                    if c in _SERIES_EXCLUDED:
+                        continue
+                    # 余剰女性音節の開子音が直前音節の末尾子音と同一音素なら二重算入しない (tête [tɛt])
+                    if is_ext and c in prev_coda:
+                        continue
+                    kind = "attaque_initiale" if j == 0 else "attaque_interne"
+                    occurrences.append({"phoneme": c, "type": "C", "kind": kind, "syl": k,
+                                        "word_order": w_order, "word": w["text"],
+                                        "lexical": w["lexical"], "ext": is_ext})
+                nuc = t.get("nucleus")
+                if nuc and nuc not in _SERIES_EXCLUDED:
+                    kind = "voyelle_tonique" if k == tonic else "voyelle"
+                    occurrences.append({"phoneme": nuc, "type": "V", "kind": kind, "syl": k,
+                                        "word_order": w_order, "word": w["text"],
+                                        "lexical": w["lexical"], "ext": is_ext})
+                for c in t.get("coda_cons", []) or []:
+                    if c in _SERIES_EXCLUDED:
+                        continue
+                    occurrences.append({"phoneme": c, "type": "C", "kind": "coda", "syl": k,
+                                        "word_order": w_order, "word": w["text"],
+                                        "lexical": w["lexical"], "ext": is_ext})
+
+        # 3. 実詞を軸とした系列の判定
+        by_ph = collections.defaultdict(list)
+        for o in occurrences:
+            by_ph[o["phoneme"]].append(o)
+
+        line_series = []
+        for ph, occs in by_ph.items():
+            lex = [o for o in occs if o["lexical"]]
+            lex_words = sorted({o["word_order"] for o in lex})
+            # 異なる2語以上の実詞にまたがること（同一語の反復 la mer, la mer は語彙的反復として扱う）
+            if len(lex_words) < 2 or len({o["word"].lower() for o in lex}) < 2:
+                continue
+            ph_type = lex[0]["type"]
+            if ph_type == "C":
+                n_attacks = sum(1 for o in lex if o["kind"] != "coda")
+                if n_attacks < 2:
+                    continue
+            else:
+                n_tonic = sum(1 for o in lex if o["kind"] == "voyelle_tonique")
+                if len(lex) < 3 and n_tonic < 2:
+                    continue
+            positions = sorted({o["syl"] for o in lex})
+            gaps = [b - a for a, b in zip(positions, positions[1:])]
+            compact = all(g <= 4 for g in gaps) if gaps else True
+            score = sum(PROSODIC_WEIGHTS[o["kind"]] for o in lex)
+            if compact:
+                score *= 1.25  # 近接性 (proximité, ≤ 4 syllabes) による強化
+            relays = [o for o in occs if not o["lexical"] and o["kind"] != "coda"]
+            lex_word_texts = []
+            seen_orders = set()
+            for o in lex:
+                if o["word_order"] not in seen_orders:
+                    seen_orders.add(o["word_order"])
+                    lex_word_texts.append(o["word"])
+            series = {
+                "line": line_num,
+                "stanza": stanza_by_line.get(line_num, 1),
+                "phoneme": ph,
+                "type": ph_type,
+                "kind": "série" if len(lex) >= 3 else "couplage",
+                "n_occ": len(lex),
+                "n_words": len(lex_words),
+                "n_initial_attacks": sum(1 for o in lex if o["kind"] == "attaque_initiale"),
+                "positions": positions,
+                "max_gap": max(gaps) if gaps else 0,
+                "compact": compact,
+                "score": round(score, 2),
+                "words": lex_word_texts,
+                "occurrences": [
+                    {"syl": o["syl"], "word": o["word"], "kind": o["kind"]} for o in lex
+                ],
+                "relays": [{"syl": o["syl"], "word": o["word"], "kind": o["kind"]} for o in relays],
+                "text": m_line.get("text", ""),
+            }
+            line_series.append(series)
+
+        line_series.sort(key=lambda s: (-s["score"], s["phoneme"]))
+        all_series.extend(line_series)
+
+        lex_syll = sum(len(w["syllables"]) for w in words if w["lexical"])
+        total_score = sum(s["score"] for s in line_series)
+        density = round(total_score / max(lex_syll, 1), 2)
+        for s in line_series:
+            matrix.append({
+                "line": line_num, "stanza": s["stanza"], "phoneme": s["phoneme"], "type": s["type"],
+                "score": s["score"], "n_occ": s["n_occ"], "words": ", ".join(s["words"]),
+            })
+
+        # 4. パラダイム（語頭開子音を共有する実詞群）
+        for w in words:
+            if not w["lexical"] or not w["syllables"]:
+                continue
+            first = toks[w["syllables"][0]]
+            onset = [c for c in (first.get("onset_cons") or []) if c not in _SERIES_EXCLUDED]
+            if onset:
+                paradigm_map[onset[0]].append({"word": w["text"], "line": line_num, "pos": w["pos"],
+                                               "attack": "".join(onset)})
+
+        lines_out.append({
+            "line": line_num,
+            "stanza": stanza_by_line.get(line_num, 1),
+            "text": m_line.get("text", ""),
+            "syllables": [
+                {
+                    "orth": t.get("orth", ""), "ipa": t.get("ipa", ""), "mark": t.get("mark", ""),
+                    "word": t.get("word_text", ""), "pos": t.get("word_pos", ""),
+                    "lexical": by_idx.get(t.get("word_idx") if t.get("word_idx") is not None else f"x{k}", {}).get("lexical", False),
+                    "word_start": bool(t.get("is_word_start")), "ext": t.get("syl_idx") is None,
+                    "caesura_after": bool(t.get("caesura_after")),
+                }
+                for k, t in enumerate(toks)
+            ],
+            "words": [{"text": w["text"], "pos": w["pos"], "lexical": w["lexical"],
+                       "phonemes": [o["phoneme"] for o in occurrences if o["word_order"] == wi]}
+                      for wi, w in enumerate(words)],
+            "series": line_series,
+            "lexical_syllables": lex_syll,
+            "lexical_words": sum(1 for w in words if w["lexical"]),
+            "series_count": len(line_series),
+            "prosodic_score": round(total_score, 2),
+            "prosodic_density": density,
+            "dominant": f"[{line_series[0]['phoneme']}]" if line_series else "",
+        })
+
+    # 系列的意味作用：2語以上の異なる実詞が同じ語頭開子音で結ばれるパラダイム
+    paradigms = []
+    for c, items in paradigm_map.items():
+        distinct = []
+        for it in items:
+            low = it["word"].lower()
+            if low not in [d.lower() for d in distinct]:
+                distinct.append(it["word"])
+        if len(distinct) < 2:
+            continue
+        lines_set = sorted({it["line"] for it in items})
+        co_lines = [ln for ln in lines_set if len({it["word"].lower() for it in items if it["line"] == ln}) >= 2]
+        paradigms.append({
+            "phoneme": c,
+            "n_words": len(distinct),
+            "n_occ": len(items),
+            "lines": lines_set,
+            "co_lines": co_lines,
+            "words": distinct,
+            "detail": items,
+        })
+    paradigms.sort(key=lambda p: (-len(p["co_lines"]), -p["n_words"], p["phoneme"]))
+
+    # 詩全体の主系列（実詞のみ）
+    global_cnt = collections.Counter()
+    for s in all_series:
+        global_cnt[s["phoneme"]] += s["score"]
+    dominant_series = [{"phoneme": ph, "score": round(sc, 2)} for ph, sc in global_cnt.most_common(12)]
+
+    return {
+        "lines": lines_out,
+        "series": all_series,
+        "matrix": matrix,
+        "paradigms": paradigms,
+        "dominant_series": dominant_series,
+    }
+
+
+def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, min_ngram_lines=None, lexical_data=None):
     """
     詩テクスト全体から、反復音素・顕著な連鎖・特定のパターン（アリテラシオン、アソナンス、
     音素連鎖網、キアスム・反響図式、プロゾディー最上級語、反復N-gram）を自動的に拾い集めて集約・分類する。
@@ -574,76 +819,38 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
 
     all_patterns = []
 
-    # 1. 行内アリテラシオン（顕著な子音反復） & アソナンス（顕著な母音反復）
-    for idx, (r, lp) in enumerate(zip(rows, lines_phonetics), 1):
-        line_num = r.get("line", idx)
-        stanza_num = r.get("stanza", 1)
-        line_text = r.get("text", "")
-        line_ipa = lp.get("ipa", "")
-        phs = lp.get("phonemes", [])
-
-        # 単語とその音素を事前分解
-        words_tokens = r.get("word_tokens", [])
-        word_phs_map = []
-        for wt in words_tokens:
-            w_text = wt.get("text", "")
-            if not any(c.isalnum() for c in w_text):
-                continue
-            ipa_w, _ = phonetics.word_to_ipa(w_text)
-            w_phs = phonetics.extract_phonemes(ipa_w)
-            word_phs_map.append({"text": w_text, "phonemes": w_phs, "ipa": ipa_w})
-
-        # 子音頻度集計（半母音/渡り音 j, w, ɥ を除く）
-        cons_in_line = [p for p in phs if p in phonetics.CONSONANTS and p not in ("j", "w", "ɥ")]
-        cons_counts = collections.Counter(cons_in_line)
-        # 短い詩句（6音節以下）は2回以上、通常詩句は3回以上
-        min_cons = 2 if r.get("syllables", 12) <= 6 else 3
-
-        for c, cnt in cons_counts.items():
-            if cnt >= min_cons:
-                matching_words = [wp["text"] for wp in word_phs_map if c in wp["phonemes"]]
-                # 複数単語にまたがるか、または同一単語内でも3回以上
-                if len(matching_words) >= 2 or cnt >= 3:
-                    all_patterns.append({
-                        "id": f"allit_L{line_num}_{c}",
-                        "line": line_num,
-                        "stanza": stanza_num,
-                        "category": "alliteration",
-                        "category_label": "Allitération",
-                        "motif": f"[{c}]",
-                        "motif_display": f"[{c}] × {cnt}",
-                        "count": cnt,
-                        "description": f"Allitération saillante : {cnt} occurrences de la consonne [{c}]",
-                        "words_involved": matching_words,
-                        "words_str": ", ".join(matching_words) if matching_words else "",
-                        "line_text": line_text,
-                        "ipa_text": line_ipa,
-                    })
-
-        # 母音頻度集計（シュワ [ə] を除く）
-        vow_in_line = [p for p in phs if p in phonetics.VOWELS_ALL and p != "ə"]
-        vow_counts = collections.Counter(vow_in_line)
-        min_vow = 2 if r.get("syllables", 12) <= 6 else 3
-
-        for v, cnt in vow_counts.items():
-            if cnt >= min_vow:
-                matching_words = [wp["text"] for wp in word_phs_map if v in wp["phonemes"]]
-                if len(matching_words) >= 2 or cnt >= 3:
-                    all_patterns.append({
-                        "id": f"asson_L{line_num}_{v}",
-                        "line": line_num,
-                        "stanza": stanza_num,
-                        "category": "assonance",
-                        "category_label": "Assonance",
-                        "motif": f"[{v}]",
-                        "motif_display": f"[{v}] × {cnt}",
-                        "count": cnt,
-                        "description": f"Assonance saillante : {cnt} occurrences du timbre vocalique [{v}]",
-                        "words_involved": matching_words,
-                        "words_str": ", ".join(matching_words) if matching_words else "",
-                        "line_text": line_text,
-                        "ipa_text": line_ipa,
-                    })
+    # 1. 実詞を軸とする行内アリテラシオン & アソナンス（冠詞・前置詞などの機能語は算定外）
+    if lexical_data is None and mesch_data and mesch_data.get("lines"):
+        lexical_data = compute_lexical_prosodic_series(mesch_data["lines"], rows)
+    ipa_by_line = {lp.get("line", i): lp.get("ipa", "") for i, lp in enumerate(lines_phonetics, 1)}
+    for s in (lexical_data or {}).get("series", []):
+        is_c = s["type"] == "C"
+        # アリテラシオン：実詞の開子音 3 回以上（または語頭開子音 2 回以上の couplage）
+        if is_c and not (s["n_occ"] >= 3 or s["n_initial_attacks"] >= 2):
+            continue
+        if not is_c and s["n_occ"] < 3:
+            continue
+        cat = "alliteration" if is_c else "assonance"
+        relay_txt = f" ; relais grammaticaux : {', '.join(r['word'] for r in s['relays'])}" if s["relays"] else ""
+        all_patterns.append({
+            "id": f"{cat}_L{s['line']}_{s['phoneme']}",
+            "line": s["line"],
+            "stanza": s["stanza"],
+            "category": cat,
+            "category_label": "Allitération" if is_c else "Assonance",
+            "motif": f"[{s['phoneme']}]",
+            "motif_display": f"[{s['phoneme']}] × {s['n_occ']} ({s['n_words']} mots pleins)",
+            "count": s["n_occ"],
+            "description": (
+                f"{s['kind'].capitalize()} {'consonantique' if is_c else 'vocalique'} [{s['phoneme']}] "
+                f"portée par {s['n_words']} mots pleins, écart max. {s['max_gap']} syll., "
+                f"poids prosodique {s['score']}{relay_txt}"
+            ),
+            "words_involved": s["words"],
+            "words_str": ", ".join(s["words"]),
+            "line_text": s["text"],
+            "ipa_text": ipa_by_line.get(s["line"], ""),
+        })
 
     # 2. Meschonnic 音素連鎖網 (active_chains)
     if mesch_data and "lines" in mesch_data:
@@ -658,6 +865,14 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
                 if kind in ("serie_consonantique", "couplage"):
                     ph = ch.get("phoneme", "")
                     span_desc = ch.get("span_desc", "")
+                    # 実詞上の支点が2つ以上ある連鎖のみ採用（冠詞・前置詞だけで成立する連鎖を除外）
+                    s_toks = m_line.get("syllable_tokens", [])
+                    lex_pos = [
+                        p for p in ch.get("positions", [])
+                        if p < len(s_toks) and _is_lexical_word(s_toks[p].get("word_text", ""), s_toks[p].get("word_pos", ""))
+                    ]
+                    if len({s_toks[p].get("word_idx") for p in lex_pos}) < 2:
+                        continue
                     pos_cnt = len(ch.get("positions", []))
                     words_in = [w.split(":")[-1] for w in span_desc.split(" ↔ ") if ":" in w]
                     kind_fr = "Série consonantique" if kind == "serie_consonantique" else "Couplage prosodique"
@@ -739,27 +954,35 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
                 "ipa_text": sup.get("ipa", ""),
             })
 
-    # 5. N-grammes phonétiques récurrents (詩行をまたいで反復されるバイグラム・トライグラム)
+    # 5. N-grammes phonétiques récurrents（実詞内部の連続音素のみ：「la」「le」等の機能語由来を排除）
     ngram_line_map = collections.defaultdict(lambda: collections.defaultdict(int))
     ngram_corpus_cnt = collections.defaultdict(int)
+    ngram_words = collections.defaultdict(lambda: collections.defaultdict(list))
 
-    for idx, lp in enumerate(lines_phonetics, 1):
-        line_num = idx
-        phs = [p for p in lp.get("phonemes", []) if p in phonetics.PHONEMES_ALL and p != "ə"]
-        # バイグラム (2連音素)
-        for i in range(len(phs) - 1):
-            p1, p2 = phs[i], phs[i+1]
-            if p1 in phonetics.CONSONANTS or p2 in phonetics.CONSONANTS:
-                bg = f"{p1}{p2}"
-                ngram_line_map[bg][line_num] += 1
-                ngram_corpus_cnt[bg] += 1
-        # トライグラム (3連音素)
-        for i in range(len(phs) - 2):
-            p1, p2, p3 = phs[i], phs[i+1], phs[i+2]
-            if any(p in phonetics.CONSONANTS for p in (p1, p2, p3)):
-                tg = f"{p1}{p2}{p3}"
-                ngram_line_map[tg][line_num] += 1
-                ngram_corpus_cnt[tg] += 1
+    lex_lines = (lexical_data or {}).get("lines", [])
+    if lex_lines:
+        seq_source = [
+            (ll["line"], [(w["text"], [p for p in w["phonemes"] if p != "ə"]) for w in ll["words"] if w["lexical"]])
+            for ll in lex_lines
+        ]
+    else:
+        seq_source = [
+            (idx, [("", [p for p in lp.get("phonemes", []) if p in phonetics.PHONEMES_ALL and p != "ə"])])
+            for idx, lp in enumerate(lines_phonetics, 1)
+        ]
+
+    for line_num, word_seqs in seq_source:
+        for w_text, phs in word_seqs:
+            for n in (2, 3):
+                for i in range(len(phs) - n + 1):
+                    gram = phs[i:i + n]
+                    if not any(p in phonetics.CONSONANTS for p in gram):
+                        continue
+                    ng = "".join(gram)
+                    ngram_line_map[ng][line_num] += 1
+                    ngram_corpus_cnt[ng] += 1
+                    if w_text and w_text not in ngram_words[ng][line_num]:
+                        ngram_words[ng][line_num].append(w_text)
 
     if min_ngram_lines is None:
         min_lines_req = 2 if n_lines <= 8 else 3
@@ -776,6 +999,7 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
                 "lines_count": len(l_map),
                 "total_count": total_c,
                 "lines": sorted(list(l_map.keys())),
+                "words": sorted({w for ln in l_map for w in ngram_words[ng][ln]}),
             })
 
     recurrent_ngrams.sort(key=lambda x: (x["lines_count"], x["total_count"], len(x["ngram"])), reverse=True)
@@ -787,12 +1011,12 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
             lp_item = next((lp for lp in lines_phonetics if lp.get("line") == l_num), {})
             st_num = r_item.get("stanza", 1)
             l_occ = ngram_line_map[ng_str][l_num]
-            w_tokens = r_item.get("word_tokens", [])
-            w_matches = []
-            for wt in w_tokens:
-                wt_ipa, _ = phonetics.word_to_ipa(wt.get("text", ""))
-                if ng_str in wt_ipa:
-                    w_matches.append(wt.get("text", ""))
+            w_matches = list(ngram_words[ng_str][l_num])
+            if not w_matches:
+                for wt in r_item.get("word_tokens", []):
+                    wt_ipa, _ = phonetics.word_to_ipa(wt.get("text", ""))
+                    if ng_str in wt_ipa:
+                        w_matches.append(wt.get("text", ""))
 
             all_patterns.append({
                 "id": f"ngram_L{l_num}_{ng_str}",
@@ -892,6 +1116,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvoca
                     "total_recurrent_ngrams": 0,
                 },
             },
+            "lexical_prosody": {"lines": [], "series": [], "matrix": [], "paradigms": [], "dominant_series": []},
         }
 
     docs = list(nlp.pipe([l["text"] for l in lines]))
@@ -995,8 +1220,11 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvoca
 
     patterns = detect_patterns(lines, docs)
 
+    lexical_prosody = compute_lexical_prosodic_series(
+        pr_result.get("meschonnic", {}).get("lines", []), rows
+    )
     salient_patterns = extract_salient_phonetic_patterns(
-        rows, line_phonetics_list, mesch_data=pr_result.get("meschonnic")
+        rows, line_phonetics_list, mesch_data=pr_result.get("meschonnic"), lexical_data=lexical_prosody
     )
 
     return {
@@ -1016,6 +1244,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvoca
         },
         "prosody_rhythm": pr_result,
         "salient_phonetic_patterns": salient_patterns,
+        "lexical_prosody": lexical_prosody,
     }
 
 def load_reference(path=Path(__file__).with_name("reference.json")):
