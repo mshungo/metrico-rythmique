@@ -1056,34 +1056,144 @@ with tab_phon_chain:
     else:
         st.info("Veuillez sélectionner au moins un phonème ou une chaîne IPA dans la palette ou le sélecteur ci-dessus.")
 
-    st.subheader("Réseau des chaînes phonématiques & Échos sonores")
-    s_col1, s_col2 = st.columns(2)
-    with s_col1:
-        dom_c_str = " ｜ ".join(f"[{d['consonant']}] ({d['count']} fois)" for d in mesch["dominant_consonant_series"])
-        dom_v_str = " ｜ ".join(f"[{d['vowel']}] ({d['count']} fois)" for d in mesch["dominant_vowel_series"])
-        st.markdown(f"**Séries consonantiques majeures (Attaques)** :  \n{dom_c_str or 'Aucune'}")
-        st.markdown(f"**Séries vocaliques majeures (Timbres)** :  \n{dom_v_str or 'Aucune'}")
-        if mesch["superlatifs_prosodiques"]:
-            st.markdown("**Mots de haute concentration phonématique**")
+    st.subheader("Collecteur automatique des motifs, récurrences et chaînes sonores")
+    st.caption(
+        "Ce module détecte et rassemble automatiquement toutes les configurations sonores remarquables "
+        "du poème : allitérations denses, assonances, chaînes phonématiques trans-lexicales, figures d'écho / "
+        "chiasmes et motifs N-grammes récurrents à travers les strophes."
+    )
+
+    salient_data = res.get("salient_phonetic_patterns", {})
+    all_patterns = salient_data.get("all_patterns", [])
+    pat_stats = salient_data.get("stats", {})
+    categories = salient_data.get("categories", [])
+    recurrent_ngrams = salient_data.get("recurrent_ngrams", [])
+
+    # Métriques clés en colonnes
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Motifs remarquables", pat_stats.get("total_patterns", 0), help="Nombre total de motifs et récurrences sonores détectés")
+    k2.metric("Allitérations intra-vers", pat_stats.get("total_alliterations", 0), help="Forte concentration de consonnes (>= 3 occ.) dans un même vers")
+    k3.metric("Assonances intra-vers", pat_stats.get("total_assonances", 0), help="Forte répétition de timbres vocaliques (>= 3 occ.) dans un vers")
+    k4.metric("Chaînes & Réseaux", pat_stats.get("total_chains", 0), help="Séries et couplages de consonnes ouvrantes (Meschonnic)")
+    k5.metric("Chiasmes & Échos", pat_stats.get("total_echos", 0) + pat_stats.get("total_superlatifs", 0), help="Chiasmes prosodiques, échos initiaux/augmentés et superlatifs")
+
+    # Filtres interactifs : Catégorie & Recherche libre
+    f_col1, f_col2 = st.columns([3, 2])
+    with f_col1:
+        cat_labels = [c["label"] for c in categories] if categories else ["Toutes les figures (0)"]
+        cat_key_map = {c["label"]: c["key"] for c in categories} if categories else {}
+        selected_cat_label = st.radio(
+            "Filtrer par type de motif sonore",
+            options=cat_labels,
+            index=0,
+            horizontal=True,
+            key="pattern_cat_filter",
+        )
+        selected_cat_key = cat_key_map.get(selected_cat_label, "all")
+
+    with f_col2:
+        search_kw = st.text_input(
+            "Recherche par phonème ou mot",
+            placeholder="Ex: [s], [ʁ], [i], serpents, amour...",
+            key="pattern_search_input",
+        ).strip()
+
+    # Application des filtres
+    disp_patterns = all_patterns
+    if selected_cat_key != "all":
+        disp_patterns = [p for p in disp_patterns if p["category"] == selected_cat_key]
+
+    if search_kw:
+        sk_clean = search_kw.strip("[]").lower()
+        disp_patterns = [
+            p for p in disp_patterns
+            if sk_clean in p.get("motif", "").lower()
+            or sk_clean in p.get("description", "").lower()
+            or any(sk_clean in w.lower() for w in p.get("words_involved", []))
+            or search_kw.lower() in p.get("line_text", "").lower()
+        ]
+
+    if disp_patterns:
+        pat_table = []
+        for p in disp_patterns:
+            pat_table.append({
+                "Vers": f"V{p['line']} (S{p['stanza']})",
+                "Catégorie": p["category_label"],
+                "Motif": p["motif_display"],
+                "Occurrences": p["count"],
+                "Mots concernés": p["words_str"],
+                "Texte du vers": p["line_text"],
+                "Description analytique": p["description"],
+            })
+        pat_df = pd.DataFrame(pat_table)
+        st.dataframe(
+            pat_df,
+            width="stretch",
+            hide_index=True,
+        )
+
+        csv_pat = pat_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Télécharger les motifs filtrés en CSV",
+            data=csv_pat,
+            file_name="motifs_sonores_extraits.csv",
+            mime="text/csv",
+            key="dl_pat_csv",
+            help="Exportez la liste complète des figures phonétiques collectées pour citation et traitement dans vos travaux."
+        )
+    else:
+        st.info("Aucun motif sonore ne correspond aux critères de recherche.")
+
+    # Section spéciale : N-grammes récurrents trans-strophiques
+    if recurrent_ngrams:
+        with st.expander("🔗 N-grammes phonétiques récurrents à travers le poème (Trame sonore)", expanded=False):
+            st.caption(
+                "Séquences de 2 ou 3 phonèmes consécutifs (bi-grammes / tri-grammes) se répétant dans plusieurs vers distincts. "
+                "Ces motifs trans-strophiques constituent des fils conducteurs sonores qui traversent la composition poétique."
+            )
+            ng_list = []
+            for ng in recurrent_ngrams:
+                ng_list.append({
+                    "Motif phonétique": ng["motif"],
+                    "Vers concernés": ", ".join(f"V{ln}" for ln in ng["lines"]),
+                    "Nombre de vers": ng["lines_count"],
+                    "Occurrences totales": ng["total_count"],
+                })
             st.dataframe(
-                pd.DataFrame(mesch["superlatifs_prosodiques"]).rename(
-                    columns={"line": "Vers", "word": "Mot", "ipa": "IPA", "consonant": "Consonne", "count_in_word": "Occurrences"}
-                )[["Vers", "Mot", "IPA", "Consonne", "Occurrences"]],
+                pd.DataFrame(ng_list),
                 width="stretch",
                 hide_index=True,
             )
-    with s_col2:
-        st.markdown("**Figures d'échos sonores et allitérations trans-vers**")
-        if mesch["echo_figures"]:
-            st.dataframe(
-                pd.DataFrame(mesch["echo_figures"]).rename(
-                    columns={"line": "Vers", "label": "Figure sonore", "example": "Contexte"}
-                )[["Vers", "Figure sonore", "Contexte"]],
-                width="stretch",
-                hide_index=True,
-            )
-        else:
-            st.info("Aucune figure d'écho phonématique isolée.")
+
+    # Séries majeures & Échos résumés (Meschonnic)
+    with st.expander("Séries consonantiques et vocaliques majeures (Attaques & Timbres)", expanded=False):
+        s_col1, s_col2 = st.columns(2)
+        with s_col1:
+            dom_c_str = " ｜ ".join(f"[{d['consonant']}] ({d['count']} fois)" for d in mesch["dominant_consonant_series"])
+            dom_v_str = " ｜ ".join(f"[{d['vowel']}] ({d['count']} fois)" for d in mesch["dominant_vowel_series"])
+            st.markdown(f"**Séries consonantiques majeures (Attaques)** :  \n{dom_c_str or 'Aucune'}")
+            st.markdown(f"**Séries vocaliques majeures (Timbres)** :  \n{dom_v_str or 'Aucune'}")
+            if mesch["superlatifs_prosodiques"]:
+                st.markdown("**Mots de haute concentration phonématique**")
+                st.dataframe(
+                    pd.DataFrame(mesch["superlatifs_prosodiques"]).rename(
+                        columns={"line": "Vers", "word": "Mot", "ipa": "IPA", "consonant": "Consonne", "count_in_word": "Occurrences"}
+                    )[["Vers", "Mot", "IPA", "Consonne", "Occurrences"]],
+                    width="stretch",
+                    hide_index=True,
+                )
+        with s_col2:
+            st.markdown("**Figures d'échos sonores et allitérations trans-vers**")
+            if mesch["echo_figures"]:
+                st.dataframe(
+                    pd.DataFrame(mesch["echo_figures"]).rename(
+                        columns={"line": "Vers", "label": "Figure sonore", "example": "Contexte"}
+                    )[["Vers", "Figure sonore", "Contexte"]],
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.info("Aucune figure d'écho phonématique isolée.")
 
 
 # -----------------------------------------------------------------------------

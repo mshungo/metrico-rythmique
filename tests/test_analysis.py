@@ -197,4 +197,55 @@ def test_compute_phoneme_progression_dynamics():
     assert "Atténuation progressive" in prof_d["dyn_label"]
 
 
+def test_extract_salient_phonetic_patterns():
+    """一定の音素の反復や有意な連鎖、特定パターンの反復（アリテラシオン、アソナンス、連鎖、反響、N-gram）自動抽出テスト。"""
+    from analysis import extract_salient_phonetic_patterns
+
+    # 1. Racine の有名なアリテラシオン詩行を含むテキスト
+    poem = """Pour qui sont ces serpents qui sifflent sur vos têtes ?
+Ce toit tranquille, où marchent des colombes,
+Entre les pins palpite, entre les tombes;
+Midi le juste y compose de feux
+La mer, la mer, toujours recommencée !"""
+
+    res = analyze(poem)
+    patterns = res.get("salient_phonetic_patterns")
+    assert patterns is not None
+    assert "all_patterns" in patterns
+    assert "summary_by_category" in patterns
+    assert "categories" in patterns
+    assert "recurrent_ngrams" in patterns
+    assert "stats" in patterns
+
+    all_pats = patterns["all_patterns"]
+    assert len(all_pats) > 0
+
+    # V1 の [s] アリテラシオンが検出されていること（sont, ces, serpents, sifflent, sur）
+    v1_allit_s = [p for p in all_pats if p["line"] == 1 and p["category"] == "alliteration" and p["motif"] == "[s]"]
+    assert len(v1_allit_s) >= 1
+    assert v1_allit_s[0]["count"] >= 4
+    assert any("serpents" in w or "sifflent" in w for w in v1_allit_s[0]["words_involved"])
+
+    # V1 の [i] アソナンスが検出されていること（qui, qui, sifflent）
+    v1_asson_i = [p for p in all_pats if p["line"] == 1 and p["category"] == "assonance" and p["motif"] == "[i]"]
+    assert len(v1_asson_i) >= 1
+    assert v1_asson_i[0]["count"] >= 3
+
+    # V3 (Valéry) の [p] アリテラシオン（pins, palpite）
+    v3_allit_p = [p for p in all_pats if p["line"] == 3 and p["category"] == "alliteration" and p["motif"] == "[p]"]
+    assert len(v3_allit_p) >= 1
+
+    # N-grammes récurrents が抽出されていること
+    assert len(patterns["recurrent_ngrams"]) > 0
+    top_ng = patterns["recurrent_ngrams"][0]
+    assert top_ng["lines_count"] >= 2
+    assert "lines" in top_ng
+
+    # 空テキストで例外が発生せず、空構造を返すこと
+    empty_res = analyze("")
+    assert empty_res["salient_phonetic_patterns"]["all_patterns"] == []
+    assert empty_res["salient_phonetic_patterns"]["stats"]["total_patterns"] == 0
+
+
+
 

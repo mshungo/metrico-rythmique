@@ -549,6 +549,307 @@ def compute_phoneme_progression_dynamics(track_records, smoothing_window=3):
         "stanza_boundaries": stanza_boundaries,
     }
 
+def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, min_ngram_lines=None):
+    """
+    詩テクスト全体から、反復音素・顕著な連鎖・特定のパターン（アリテラシオン、アソナンス、
+    音素連鎖網、キアスム・反響図式、プロゾディー最上級語、反復N-gram）を自動的に拾い集めて集約・分類する。
+    """
+    n_lines = len(rows)
+    if n_lines == 0 or len(lines_phonetics) == 0:
+        return {
+            "all_patterns": [],
+            "summary_by_category": {},
+            "categories": [],
+            "recurrent_ngrams": [],
+            "stats": {
+                "total_patterns": 0,
+                "total_alliterations": 0,
+                "total_assonances": 0,
+                "total_chains": 0,
+                "total_echos": 0,
+                "total_superlatifs": 0,
+                "total_recurrent_ngrams": 0,
+            },
+        }
+
+    all_patterns = []
+
+    # 1. 行内アリテラシオン（顕著な子音反復） & アソナンス（顕著な母音反復）
+    for idx, (r, lp) in enumerate(zip(rows, lines_phonetics), 1):
+        line_num = r.get("line", idx)
+        stanza_num = r.get("stanza", 1)
+        line_text = r.get("text", "")
+        line_ipa = lp.get("ipa", "")
+        phs = lp.get("phonemes", [])
+
+        # 単語とその音素を事前分解
+        words_tokens = r.get("word_tokens", [])
+        word_phs_map = []
+        for wt in words_tokens:
+            w_text = wt.get("text", "")
+            if not any(c.isalnum() for c in w_text):
+                continue
+            ipa_w, _ = phonetics.word_to_ipa(w_text)
+            w_phs = phonetics.extract_phonemes(ipa_w)
+            word_phs_map.append({"text": w_text, "phonemes": w_phs, "ipa": ipa_w})
+
+        # 子音頻度集計（半母音/渡り音 j, w, ɥ を除く）
+        cons_in_line = [p for p in phs if p in phonetics.CONSONANTS and p not in ("j", "w", "ɥ")]
+        cons_counts = collections.Counter(cons_in_line)
+        # 短い詩句（6音節以下）は2回以上、通常詩句は3回以上
+        min_cons = 2 if r.get("syllables", 12) <= 6 else 3
+
+        for c, cnt in cons_counts.items():
+            if cnt >= min_cons:
+                matching_words = [wp["text"] for wp in word_phs_map if c in wp["phonemes"]]
+                # 複数単語にまたがるか、または同一単語内でも3回以上
+                if len(matching_words) >= 2 or cnt >= 3:
+                    all_patterns.append({
+                        "id": f"allit_L{line_num}_{c}",
+                        "line": line_num,
+                        "stanza": stanza_num,
+                        "category": "alliteration",
+                        "category_label": "Allitération",
+                        "motif": f"[{c}]",
+                        "motif_display": f"[{c}] × {cnt}",
+                        "count": cnt,
+                        "description": f"Allitération saillante : {cnt} occurrences de la consonne [{c}]",
+                        "words_involved": matching_words,
+                        "words_str": ", ".join(matching_words) if matching_words else "",
+                        "line_text": line_text,
+                        "ipa_text": line_ipa,
+                    })
+
+        # 母音頻度集計（シュワ [ə] を除く）
+        vow_in_line = [p for p in phs if p in phonetics.VOWELS_ALL and p != "ə"]
+        vow_counts = collections.Counter(vow_in_line)
+        min_vow = 2 if r.get("syllables", 12) <= 6 else 3
+
+        for v, cnt in vow_counts.items():
+            if cnt >= min_vow:
+                matching_words = [wp["text"] for wp in word_phs_map if v in wp["phonemes"]]
+                if len(matching_words) >= 2 or cnt >= 3:
+                    all_patterns.append({
+                        "id": f"asson_L{line_num}_{v}",
+                        "line": line_num,
+                        "stanza": stanza_num,
+                        "category": "assonance",
+                        "category_label": "Assonance",
+                        "motif": f"[{v}]",
+                        "motif_display": f"[{v}] × {cnt}",
+                        "count": cnt,
+                        "description": f"Assonance saillante : {cnt} occurrences du timbre vocalique [{v}]",
+                        "words_involved": matching_words,
+                        "words_str": ", ".join(matching_words) if matching_words else "",
+                        "line_text": line_text,
+                        "ipa_text": line_ipa,
+                    })
+
+    # 2. Meschonnic 音素連鎖網 (active_chains)
+    if mesch_data and "lines" in mesch_data:
+        for idx, (m_line, r, lp) in enumerate(zip(mesch_data["lines"], rows, lines_phonetics), 1):
+            line_num = r.get("line", idx)
+            stanza_num = r.get("stanza", 1)
+            line_text = r.get("text", "")
+            line_ipa = lp.get("ipa", "")
+
+            for ch in m_line.get("active_chains", []):
+                kind = ch.get("kind", "")
+                if kind in ("serie_consonantique", "couplage"):
+                    ph = ch.get("phoneme", "")
+                    span_desc = ch.get("span_desc", "")
+                    pos_cnt = len(ch.get("positions", []))
+                    words_in = [w.split(":")[-1] for w in span_desc.split(" ↔ ") if ":" in w]
+                    kind_fr = "Série consonantique" if kind == "serie_consonantique" else "Couplage prosodique"
+                    all_patterns.append({
+                        "id": f"chain_L{line_num}_{ph}_{abs(hash(span_desc)) % 10000}",
+                        "line": line_num,
+                        "stanza": stanza_num,
+                        "category": "chaine",
+                        "category_label": "Chaîne phonématique",
+                        "motif": f"[{ph}]",
+                        "motif_display": f"{kind_fr} [{ph}]",
+                        "count": pos_cnt,
+                        "description": f"Chaîne de consonnes ouvrantes ({pos_cnt} points d'appui) : {span_desc}",
+                        "words_involved": words_in,
+                        "words_str": ", ".join(words_in) if words_in else span_desc,
+                        "line_text": line_text,
+                        "ipa_text": line_ipa,
+                    })
+
+    # 3. Meschonnic 反響図式 & キアスム (echo_figures)
+    if mesch_data and "echo_figures" in mesch_data:
+        figure_labels = {
+            "chiasme_prosodique": "Chiasme prosodique / Écho renversé",
+            "echo_initial": "Écho initial (attaques C(C)V identiques)",
+            "echo_diminue": "Écho diminué",
+            "echo_augmente": "Écho augmenté",
+            "rebond_de_consonnes": "Rebond de consonnes (schwa intercalaire)",
+            "hiatus_de_consonnes": "Hiatus de consonnes (coda-attaque)",
+        }
+        for fig in mesch_data["echo_figures"]:
+            fig_type = fig.get("figure", "")
+            if fig_type == "superlatif_prosodique":
+                continue
+            l_num = fig.get("line", 1)
+            r_item = next((r for r in rows if r.get("line") == l_num), {})
+            lp_item = next((lp for lp in lines_phonetics if lp.get("line") == l_num), {})
+            st_num = r_item.get("stanza", 1)
+            ex_txt = fig.get("example", "")
+            words_in = [w.strip() for w in re.split(r"[↔→#]", ex_txt) if w.strip()]
+            desc_label = figure_labels.get(fig_type, fig.get("label", fig_type))
+            all_patterns.append({
+                "id": f"echo_L{l_num}_{fig_type}_{abs(hash(ex_txt)) % 10000}",
+                "line": l_num,
+                "stanza": st_num,
+                "category": "chiasme_echo",
+                "category_label": "Chiasme & Écho",
+                "motif": fig.get("label", fig_type),
+                "motif_display": fig.get("label", fig_type),
+                "count": 2,
+                "description": f"{desc_label} : {ex_txt}",
+                "words_involved": words_in,
+                "words_str": ex_txt,
+                "line_text": r_item.get("text", ""),
+                "ipa_text": lp_item.get("ipa", ""),
+            })
+
+    # 4. Superlatifs prosodiques（高密度凝縮語）
+    if mesch_data and "superlatifs_prosodiques" in mesch_data:
+        for sup in mesch_data["superlatifs_prosodiques"]:
+            l_num = sup.get("line", 1)
+            r_item = next((r for r in rows if r.get("line") == l_num), {})
+            st_num = r_item.get("stanza", 1)
+            c_ph = sup.get("consonant", "")
+            w_text = sup.get("word", "")
+            c_cnt = sup.get("count_in_word", 2)
+            all_patterns.append({
+                "id": f"sup_L{l_num}_{w_text}_{c_ph}",
+                "line": l_num,
+                "stanza": st_num,
+                "category": "superlatif",
+                "category_label": "Superlatif prosodique",
+                "motif": f"[{c_ph}] × {c_cnt}",
+                "motif_display": f"Superlatif [{c_ph}] × {c_cnt}",
+                "count": c_cnt,
+                "description": f"Concentration phonématique maximale de [{c_ph}] dans le mot « {w_text} » [{sup.get('ipa','')}]",
+                "words_involved": [w_text],
+                "words_str": f"{w_text} [{sup.get('ipa', '')}]",
+                "line_text": r_item.get("text", ""),
+                "ipa_text": sup.get("ipa", ""),
+            })
+
+    # 5. N-grammes phonétiques récurrents (詩行をまたいで反復されるバイグラム・トライグラム)
+    ngram_line_map = collections.defaultdict(lambda: collections.defaultdict(int))
+    ngram_corpus_cnt = collections.defaultdict(int)
+
+    for idx, lp in enumerate(lines_phonetics, 1):
+        line_num = idx
+        phs = [p for p in lp.get("phonemes", []) if p in phonetics.PHONEMES_ALL and p != "ə"]
+        # バイグラム (2連音素)
+        for i in range(len(phs) - 1):
+            p1, p2 = phs[i], phs[i+1]
+            if p1 in phonetics.CONSONANTS or p2 in phonetics.CONSONANTS:
+                bg = f"{p1}{p2}"
+                ngram_line_map[bg][line_num] += 1
+                ngram_corpus_cnt[bg] += 1
+        # トライグラム (3連音素)
+        for i in range(len(phs) - 2):
+            p1, p2, p3 = phs[i], phs[i+1], phs[i+2]
+            if any(p in phonetics.CONSONANTS for p in (p1, p2, p3)):
+                tg = f"{p1}{p2}{p3}"
+                ngram_line_map[tg][line_num] += 1
+                ngram_corpus_cnt[tg] += 1
+
+    if min_ngram_lines is None:
+        min_lines_req = 2 if n_lines <= 8 else 3
+    else:
+        min_lines_req = min_ngram_lines
+
+    recurrent_ngrams = []
+    for ng, l_map in ngram_line_map.items():
+        total_c = ngram_corpus_cnt[ng]
+        if len(l_map) >= min_lines_req or (len(l_map) >= 2 and total_c >= 3):
+            recurrent_ngrams.append({
+                "ngram": ng,
+                "motif": f"[{ng}]",
+                "lines_count": len(l_map),
+                "total_count": total_c,
+                "lines": sorted(list(l_map.keys())),
+            })
+
+    recurrent_ngrams.sort(key=lambda x: (x["lines_count"], x["total_count"], len(x["ngram"])), reverse=True)
+
+    for rng in recurrent_ngrams[:12]:
+        ng_str = rng["ngram"]
+        for l_num in rng["lines"]:
+            r_item = next((r for r in rows if r.get("line") == l_num), {})
+            lp_item = next((lp for lp in lines_phonetics if lp.get("line") == l_num), {})
+            st_num = r_item.get("stanza", 1)
+            l_occ = ngram_line_map[ng_str][l_num]
+            w_tokens = r_item.get("word_tokens", [])
+            w_matches = []
+            for wt in w_tokens:
+                wt_ipa, _ = phonetics.word_to_ipa(wt.get("text", ""))
+                if ng_str in wt_ipa:
+                    w_matches.append(wt.get("text", ""))
+
+            all_patterns.append({
+                "id": f"ngram_L{l_num}_{ng_str}",
+                "line": l_num,
+                "stanza": st_num,
+                "category": "ngram",
+                "category_label": "N-gramme récurrent",
+                "motif": f"[{ng_str}]",
+                "motif_display": f"[{ng_str}] ({rng['lines_count']} vers)",
+                "count": l_occ,
+                "description": f"Motif trans-strophique [{ng_str}] répété dans {rng['lines_count']} vers ({l_occ} fois dans ce vers)",
+                "words_involved": w_matches,
+                "words_str": ", ".join(w_matches) if w_matches else f"[{ng_str}]",
+                "line_text": r_item.get("text", ""),
+                "ipa_text": lp_item.get("ipa", ""),
+            })
+
+    cat_order = {"alliteration": 1, "assonance": 2, "chaine": 3, "chiasme_echo": 4, "superlatif": 5, "ngram": 6}
+    all_patterns.sort(key=lambda x: (x["line"], cat_order.get(x["category"], 99), -x["count"]))
+
+    summary_by_category = {
+        "alliteration": {"label": "Allitération", "count": sum(1 for p in all_patterns if p["category"] == "alliteration")},
+        "assonance": {"label": "Assonance", "count": sum(1 for p in all_patterns if p["category"] == "assonance")},
+        "chaine": {"label": "Chaîne phonématique", "count": sum(1 for p in all_patterns if p["category"] == "chaine")},
+        "chiasme_echo": {"label": "Chiasme & Écho", "count": sum(1 for p in all_patterns if p["category"] == "chiasme_echo")},
+        "superlatif": {"label": "Superlatif prosodique", "count": sum(1 for p in all_patterns if p["category"] == "superlatif")},
+        "ngram": {"label": "N-gramme récurrent", "count": sum(1 for p in all_patterns if p["category"] == "ngram")},
+    }
+
+    categories = [
+        {"key": "all", "label": f"Toutes les figures ({len(all_patterns)})"},
+        {"key": "alliteration", "label": f"Allitérations ({summary_by_category['alliteration']['count']})"},
+        {"key": "assonance", "label": f"Assonances ({summary_by_category['assonance']['count']})"},
+        {"key": "chaine", "label": f"Chaînes phonématiques ({summary_by_category['chaine']['count']})"},
+        {"key": "chiasme_echo", "label": f"Chiasmes & Échos ({summary_by_category['chiasme_echo']['count']})"},
+        {"key": "superlatif", "label": f"Superlatifs prosodiques ({summary_by_category['superlatif']['count']})"},
+        {"key": "ngram", "label": f"N-grammes récurrents ({summary_by_category['ngram']['count']})"},
+    ]
+
+    stats = {
+        "total_patterns": len(all_patterns),
+        "total_alliterations": summary_by_category["alliteration"]["count"],
+        "total_assonances": summary_by_category["assonance"]["count"],
+        "total_chains": summary_by_category["chaine"]["count"],
+        "total_echos": summary_by_category["chiasme_echo"]["count"],
+        "total_superlatifs": summary_by_category["superlatif"]["count"],
+        "total_recurrent_ngrams": len(recurrent_ngrams),
+    }
+
+    return {
+        "all_patterns": all_patterns,
+        "summary_by_category": summary_by_category,
+        "categories": categories,
+        "recurrent_ngrams": recurrent_ngrams,
+        "stats": stats,
+    }
+
 # ---------- 分析メイン ----------
 def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvocalic_e=False):
     """詩テクストを解析し、行データ・指標・定型句・音素分析（IPA・リエゾン・偏差）などを返す。"""
@@ -576,6 +877,21 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvoca
                 "total_liaisons": 0,
             },
             "prosody_rhythm": analyze_prosody_and_rhythm([], [], [], [], dierese=dierese, ancient_postvocalic_e=ancient_postvocalic_e),
+            "salient_phonetic_patterns": {
+                "all_patterns": [],
+                "summary_by_category": {},
+                "categories": [],
+                "recurrent_ngrams": [],
+                "stats": {
+                    "total_patterns": 0,
+                    "total_alliterations": 0,
+                    "total_assonances": 0,
+                    "total_chains": 0,
+                    "total_echos": 0,
+                    "total_superlatifs": 0,
+                    "total_recurrent_ngrams": 0,
+                },
+            },
         }
 
     docs = list(nlp.pipe([l["text"] for l in lines]))
@@ -679,6 +995,10 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvoca
 
     patterns = detect_patterns(lines, docs)
 
+    salient_patterns = extract_salient_phonetic_patterns(
+        rows, line_phonetics_list, mesch_data=pr_result.get("meschonnic")
+    )
+
     return {
         "rows": rows,
         "metrics": metrics,
@@ -695,6 +1015,7 @@ def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvoca
             "total_liaisons": len(all_liaisons),
         },
         "prosody_rhythm": pr_result,
+        "salient_phonetic_patterns": salient_patterns,
     }
 
 def load_reference(path=Path(__file__).with_name("reference.json")):
