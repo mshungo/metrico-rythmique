@@ -353,6 +353,202 @@ def detect_patterns(lines, docs):
         "anaphora": anaphora_groups,
     }
 
+# ---------- 論文・研究引用向け音素動態解析 ----------
+def compute_phoneme_progression_dynamics(track_records, smoothing_window=3):
+    """Calcule la trajectoire, la tendance lissée (moyenne mobile), la régression linéaire et
+    la répartition strophique pour chaque phonème ou chaîne, afin de permettre une citation
+    académique rigoureuse (thèses, articles de stylistique/linguistique).
+    """
+    if not track_records:
+        return {"profiles": {}, "enriched_records": [], "stanza_boundaries": []}
+
+    # Détection des frontières de strophes
+    stanza_boundaries = []
+    seen_stanzas = set()
+    for r in track_records:
+        st_num = r.get("stanza", 1)
+        l_num = r.get("line", 1)
+        if st_num not in seen_stanzas and l_num > 1:
+            stanza_boundaries.append({"line": l_num, "stanza": st_num})
+            seen_stanzas.add(st_num)
+        seen_stanzas.add(st_num)
+
+    # Regroupement par phonème
+    ph_groups = collections.defaultdict(list)
+    for r in track_records:
+        ph_groups[r["phoneme"]].append(r)
+
+    profiles = {}
+    enriched_records = []
+
+    for ph, rows in ph_groups.items():
+        n = len(rows)
+        if n == 0:
+            continue
+
+        rows_sorted = sorted(rows, key=lambda x: x["line"])
+        xs = [float(r["line"]) for r in rows_sorted]
+        ys = [float(r.get("count", 0)) for r in rows_sorted]
+        y_norms = [float(r.get("norm_12", 0.0)) for r in rows_sorted]
+
+        # Calcul de la moyenne mobile centrée
+        w_rad = max(1, smoothing_window // 2)
+        rolling_counts = []
+        rolling_norms = []
+        for i in range(n):
+            i_start = max(0, i - w_rad)
+            i_end = min(n, i + w_rad + 1)
+            window_slice_c = ys[i_start:i_end]
+            window_slice_n = y_norms[i_start:i_end]
+            rolling_counts.append(round(sum(window_slice_c) / len(window_slice_c), 2))
+            rolling_norms.append(round(sum(window_slice_n) / len(window_slice_n), 2))
+
+        for r_dict, r_c, r_n in zip(rows_sorted, rolling_counts, rolling_norms):
+            r_copy = dict(r_dict)
+            r_copy["rolling_count"] = r_c
+            r_copy["rolling_norm_12"] = r_n
+            enriched_records.append(r_copy)
+
+        tot_c = sum(ys)
+        mean_c = round(tot_c / n, 2) if n > 0 else 0.0
+        max_c = max(ys) if ys else 0
+        peak_lines = [int(r["line"]) for r in rows_sorted if r.get("count", 0) == max_c and max_c > 0]
+
+        mean_x = sum(xs) / n if n > 0 else 0.0
+        mean_y = sum(ys) / n if n > 0 else 0.0
+        var_x = sum((x - mean_x) ** 2 for x in xs)
+        cov_xy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+        var_y = sum((y - mean_y) ** 2 for y in ys)
+
+        slope = round(cov_xy / var_x, 3) if var_x > 0 else 0.0
+        r_val = round(cov_xy / math.sqrt(var_x * var_y), 2) if (var_x * var_y) > 0 else 0.0
+
+        st_dict = collections.defaultdict(list)
+        for r in rows_sorted:
+            st_dict[r.get("stanza", 1)].append(r)
+
+        strophes_summary = []
+        for st_idx, st_rows in sorted(st_dict.items()):
+            st_tot = sum(r.get("count", 0) for r in st_rows)
+            st_lines = [r["line"] for r in st_rows]
+            st_mean = round(st_tot / len(st_rows), 2) if st_rows else 0.0
+            st_pct = round(100.0 * st_tot / tot_c, 1) if tot_c > 0 else 0.0
+            span_str = f"v. {st_lines[0]}–{st_lines[-1]}" if len(st_lines) > 1 else f"v. {st_lines[0]}"
+            strophes_summary.append({
+                "stanza": st_idx,
+                "lines_span": span_str,
+                "count": int(st_tot),
+                "pct": st_pct,
+                "mean_per_line": st_mean,
+            })
+
+        if r_val >= 0.30 and slope > 0.03:
+            dyn_code = "crescendo"
+            dyn_label = "Renforcement progressif (Crescendo ↗)"
+            badge_color = "#16a34a"
+        elif r_val <= -0.30 and slope < -0.03:
+            dyn_code = "decrescendo"
+            dyn_label = "Atténuation progressive (Decrescendo ↘)"
+            badge_color = "#dc2626"
+        elif peak_lines and any(n * 0.20 <= pl <= n * 0.80 for pl in peak_lines) and max_c >= max(mean_c * 1.5, 2):
+            dyn_code = "climax"
+            dyn_label = "Apogée médian (Concentration centrale ∧)"
+            badge_color = "#7c3aed"
+        else:
+            dyn_code = "diffuse"
+            dyn_label = "Trame diffuse / Équilibrée (↔)"
+            badge_color = "#2563eb"
+
+        peak_str = ", ".join(f"v. {pl}" for pl in peak_lines) if peak_lines else "aucun"
+        peak_text = next((r["text"] for r in rows_sorted if r["line"] in peak_lines), "") if peak_lines else ""
+
+        if dyn_code == "crescendo":
+            comm = (
+                f"Le phonème {ph} manifeste une dynamique d'intensification progressive au fil du poème "
+                f"(pente de régression linéaire β = {slope:+.3f}, coefficient de corrélation r = {r_val:+.2f}). "
+                f"Avec un effectif total de {int(tot_c)} occurrences (moyenne de {mean_c:.2f} occ./vers), sa présence s'accroît "
+                f"pour atteindre son point culminant au {peak_str} ({int(max_c)} occurrences, ex. « {peak_text} »). "
+            )
+        elif dyn_code == "decrescendo":
+            comm = (
+                f"Le phonème {ph} présente une dynamique d'atténuation continue au cours du poème "
+                f"(pente de régression linéaire β = {slope:+.3f}, coefficient de corrélation r = {r_val:+.2f}). "
+                f"Initialement saillant en tête de texte, son intensité décroît progressivement "
+                f"(moyenne globale : {mean_c:.2f} occ./vers, pic initial au {peak_str} avec {int(max_c)} occurrences). "
+            )
+        elif dyn_code == "climax":
+            comm = (
+                f"Le phonème {ph} s'organise selon une structure en arche avec une forte concentration médiane "
+                f"(apogée au {peak_str} culminant à {int(max_c)} occurrences, contre une moyenne générale de {mean_c:.2f} occ./vers). "
+                f"Cette focalisation sonore constitue un pivot expressif au coeur de l'architecture poétique (ex. « {peak_text} »). "
+            )
+        else:
+            comm = (
+                f"Le phonème {ph} présente une distribution équilibrée et continue sur l'ensemble du poème "
+                f"(pente β = {slope:+.3f}, r = {r_val:+.2f}, moyenne = {mean_c:.2f} occ./vers, pic au {peak_str} avec {int(max_c)} occ.). "
+                f"Il assure un tissage phonique stable sans rupture abrupte d'intensité. "
+            )
+
+        if strophes_summary and len(strophes_summary) > 1:
+            st_text_parts = [
+                f"Strophe {s['stanza']} ({s['lines_span']}) : {s['count']} occ. ({s['pct']} %, moy. {s['mean_per_line']}/v.)"
+                for s in strophes_summary
+            ]
+            comm += "Évolution strophique : " + " ｜ ".join(st_text_parts) + "."
+
+        latex_lines = [
+            r"\begin{table}[htbp]",
+            r"\centering",
+            rf"\caption{{Modulation strophique du phonème {ph} (pente $\beta = {slope:+.3f}$, $r = {r_val:+.2f}$)}}",
+            rf"\label{{tab:dyn_{ph.strip('[]')}}}",
+            r"\begin{tabular}{lcccc}",
+            r"\hline",
+            r"Strophe & Vers & Occurrences & Part (\%) & Moyenne/vers \\",
+            r"\hline",
+        ]
+        for s in strophes_summary:
+            latex_lines.append(f"Strophe {s['stanza']} & {s['lines_span']} & {s['count']} & {s['pct']}\\% & {s['mean_per_line']} \\\\")
+        latex_lines.extend([
+            r"\hline",
+            rf"\textbf{{Total}} & \textbf{{1--{n}}} & \textbf{{{int(tot_c)}}} & \textbf{{100.0\%}} & \textbf{{{mean_c}}} \\\\",
+            r"\hline",
+            r"\end{tabular}",
+            r"\end{table}",
+        ])
+        latex_table = "\n".join(latex_lines)
+
+        md_lines = [
+            f"| Strophe | Vers | Occurrences | Part (%) | Moyenne / vers |",
+            f"| :--- | :--- | :---: | :---: | :---: |",
+        ]
+        for s in strophes_summary:
+            md_lines.append(f"| Strophe {s['stanza']} | {s['lines_span']} | {s['count']} | {s['pct']} % | {s['mean_per_line']} |")
+        md_lines.append(f"| **Total** | **1–{n}** | **{int(tot_c)}** | **100.0 %** | **{mean_c}** |")
+        md_table = "\n".join(md_lines)
+
+        profiles[ph] = {
+            "phoneme": ph,
+            "total_count": int(tot_c),
+            "mean_per_line": mean_c,
+            "max_count": int(max_c),
+            "peak_lines": peak_lines,
+            "slope": slope,
+            "correlation_r": r_val,
+            "dyn_code": dyn_code,
+            "dyn_label": dyn_label,
+            "badge_color": badge_color,
+            "academic_citation_fr": comm,
+            "strophes_summary": strophes_summary,
+            "latex_table": latex_table,
+            "markdown_table": md_table,
+        }
+
+    return {
+        "profiles": profiles,
+        "enriched_records": enriched_records,
+        "stanza_boundaries": stanza_boundaries,
+    }
+
 # ---------- 分析メイン ----------
 def analyze(text, dierese=False, fold_indented=False, nlp=None, ancient_postvocalic_e=False):
     """詩テクストを解析し、行データ・指標・定型句・音素分析（IPA・リエゾン・偏差）などを返す。"""

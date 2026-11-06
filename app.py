@@ -18,7 +18,7 @@ import prosody_rhythm
 importlib.reload(phonetics)
 importlib.reload(prosody_rhythm)
 importlib.reload(analysis)
-from analysis import analyze, load_reference
+from analysis import analyze, load_reference, compute_phoneme_progression_dynamics
 
 LABELS_FR = {
     "punct_per100": "Ponctuation (pour 100 mots)",
@@ -726,14 +726,25 @@ with tab_phon_chain:
             "Pourcentage du vers (%)",
             "Cumul progressif",
         ]
-        track_mode = st.radio(
-            "Indicateur de suivi",
-            options=track_options,
-            index=0,
-            horizontal=True,
-            key="ph_track_mode_unified",
-            help="Comparez les occurrences brutes ou normalisées pour neutraliser la disparité de longueur des vers."
-        )
+        c_tr_opt1, c_tr_opt2 = st.columns([3, 2])
+        with c_tr_opt1:
+            track_mode = st.radio(
+                "Indicateur de suivi",
+                options=track_options,
+                index=0,
+                horizontal=True,
+                key="ph_track_mode_unified",
+                help="Comparez les occurrences brutes ou normalisées pour neutraliser la disparité de longueur des vers."
+            )
+        with c_tr_opt2:
+            smoothing_w = st.slider(
+                "Fenêtre de lissage (Courbe de tendance continue)",
+                min_value=2,
+                max_value=5,
+                value=3,
+                key="ph_smoothing_w",
+                help="Nombre de vers pris en compte pour la moyenne mobile centrée afin de faire émerger la trajectoire macro-stylistique (crescendo / decrescendo)."
+            )
 
         lines_data = res["phonetics"].get("lines", [])
         track_records = []
@@ -793,44 +804,59 @@ with tab_phon_chain:
                     "ipa": l_ipa,
                 })
 
-        track_df = pd.DataFrame(track_records)
+        # Calcul dynamique et trajectoire académique
+        progression_data = compute_phoneme_progression_dynamics(track_records, smoothing_window=smoothing_w)
+        track_df = pd.DataFrame(progression_data["enriched_records"])
         track_df["cumulative"] = track_df.groupby("phoneme")["count"].cumsum()
+        profiles = progression_data["profiles"]
+        stanza_bounds = progression_data["stanza_boundaries"]
 
         if track_mode.startswith("Occurrences réelles"):
             val_col = "count"
+            smooth_col = "rolling_count"
             y_title = "Occurrences réelles (Nombre)"
             val_tooltip_title = "Occurrences"
             val_format = "d"
         elif track_mode.startswith("Standardisé à 12"):
             val_col = "norm_12"
+            smooth_col = "rolling_norm_12"
             y_title = "Fréquence standardisée (occ./12 syllabes)"
             val_tooltip_title = "Standard 12v"
             val_format = ".2f"
         elif track_mode.startswith("Ratio Observé"):
             val_col = "oe_ratio"
+            smooth_col = "oe_ratio"
             y_title = "Ratio Observé / Attendu (O/E)"
             val_tooltip_title = "Ratio O/E"
             val_format = ".2f"
         elif track_mode.startswith("Score d'écart"):
             val_col = "z_line"
+            smooth_col = "z_line"
             y_title = "Score d'écart statistique (z-score)"
             val_tooltip_title = "Écart z"
             val_format = "+.2f"
         elif track_mode.startswith("Pourcentage"):
             val_col = "pct"
+            smooth_col = "pct"
             y_title = "Part phonématique du vers (%)"
             val_tooltip_title = "Part (%)"
             val_format = ".1f"
         else:
             val_col = "cumulative"
+            smooth_col = "cumulative"
             y_title = "Occurrences cumulées"
             val_tooltip_title = "Cumul"
             val_format = "d"
 
         PALETTE = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#db2777", "#4b5563"]
 
-        st.subheader(f"Graphiques individuels d'évolution vers par vers ({val_tooltip_title})")
-        st.caption(f"Profil individuel pour chaque phonème ou chaîne sélectionné ({y_title}). La ligne pointillée indique la moyenne par vers.")
+        st.subheader(f"Trajectoires et courbes d'intensité continue ({val_tooltip_title})")
+        st.caption(
+            "Visualisation adaptée pour citation académique. "
+            "La **courbe pleine épaisse** représente la trajectoire lissée (dynamique de renforcement / affaiblissement). "
+            "Les barres et points indiquent les valeurs réelles par vers. "
+            "Les lignes verticales pointillées grises séparent les strophes, et la ligne pointillée horizontale marque la moyenne."
+        )
 
         n_targets = len(target_queries)
         cols_per_row = 2 if n_targets >= 2 else 1
@@ -854,9 +880,19 @@ with tab_phon_chain:
                 mean_str = f"{mean_v:.2f}"
                 max_str = f"{int(max_v)}" if val_format == "d" else f"{max_v:{val_format}}"
 
+                prof = profiles.get(t_label, {})
+                badge_lbl = prof.get("dyn_label", "")
+                badge_bg = prof.get("badge_color", color)
+                slope_v = prof.get("slope", 0.0)
+                r_v = prof.get("correlation_r", 0.0)
+
                 with col_ui:
                     st.markdown(
-                        f"**{t_label}** ｜ Total : **{tot_c}** occ. ｜ Moyenne : **{mean_str}** ｜ Pic : Vers **{best_line}** ({max_str})"
+                        f"**{t_label}** ｜ Total : **{tot_c}** occ. ｜ "
+                        f"<span style='background-color:{badge_bg}18; color:{badge_bg}; font-weight:700; padding:2px 8px; border-radius:12px; font-size:0.82rem; border:1px solid {badge_bg}44;'>"
+                        f"{badge_lbl} (β = {slope_v:+.3f}, r = {r_v:+.2f})"
+                        f"</span> ｜ Pic : Vers **{best_line}** ({max_str})",
+                        unsafe_allow_html=True
                     )
                     base = alt.Chart(df_sub).encode(
                         x=alt.X("line:O", title="Numéro du vers"),
@@ -865,7 +901,8 @@ with tab_phon_chain:
                             alt.Tooltip("stanza:O", title="Strophe"),
                             alt.Tooltip("syllables:Q", title="Syllabes"),
                             alt.Tooltip("count:Q", title="Occurrences réelles"),
-                            alt.Tooltip(f"{val_col}:Q", title=val_tooltip_title, format=val_format),
+                            alt.Tooltip(f"{val_col}:Q", title=f"{val_tooltip_title} (Réel)", format=val_format),
+                            alt.Tooltip(f"{smooth_col}:Q", title=f"{val_tooltip_title} (Lissé)", format=".2f"),
                             alt.Tooltip("norm_12:Q", title="Standard 12v", format=".2f"),
                             alt.Tooltip("z_line:Q", title="Score z", format="+.2f"),
                             alt.Tooltip("oe_ratio:Q", title="Ratio O/E", format=".2f"),
@@ -873,17 +910,37 @@ with tab_phon_chain:
                             alt.Tooltip("ipa:N", title="IPA du vers"),
                         ]
                     )
-                    bars = base.mark_bar(opacity=0.35, color=color).encode(
+                    # Barres réelles
+                    bars = base.mark_bar(opacity=0.25, color=color).encode(
                         y=alt.Y(f"{val_col}:Q", title=val_tooltip_title, axis=alt.Axis(tickMinStep=1 if val_col == "count" else None))
                     )
-                    lines = base.mark_line(point=True, strokeWidth=2.2, color=color).encode(
+                    # Points discrets
+                    points = base.mark_circle(size=35, opacity=0.75, color=color).encode(
                         y=alt.Y(f"{val_col}:Q")
                     )
+                    # Liaison discrète fine pointillée
+                    line_disc = base.mark_line(strokeWidth=1.0, strokeDash=[2, 2], color=color, opacity=0.4).encode(
+                        y=alt.Y(f"{val_col}:Q")
+                    )
+                    # Courbe de tendance lissée (trajectoire continue)
+                    line_smooth = base.mark_line(strokeWidth=3.2, color=color, interpolate="monotone").encode(
+                        y=alt.Y(f"{smooth_col}:Q")
+                    )
+                    # Ligne de moyenne
                     mean_rule = alt.Chart(pd.DataFrame([{"mean_val": mean_v}])).mark_rule(
                         color=color, strokeDash=[4, 4], strokeWidth=1.2
                     ).encode(y="mean_val:Q")
 
-                    chart_obj = (bars + lines + mean_rule).properties(height=230)
+                    chart_layers = [bars, line_disc, points, line_smooth, mean_rule]
+
+                    # Délimitation strophique
+                    if stanza_bounds:
+                        st_rule = alt.Chart(pd.DataFrame(stanza_bounds)).mark_rule(
+                            color="#94a3b8", strokeDash=[3, 3], strokeWidth=1.0
+                        ).encode(x="line:O")
+                        chart_layers.append(st_rule)
+
+                    chart_obj = alt.layer(*chart_layers).properties(height=240)
 
                     if val_col == "oe_ratio":
                         ref_1 = alt.Chart(pd.DataFrame([{"y": 1.0}])).mark_rule(color="#ef4444", strokeDash=[3, 3], strokeWidth=1).encode(y="y:Q")
@@ -897,27 +954,21 @@ with tab_phon_chain:
         with st.expander("Vue comparative superposée & Carte thermique (Heatmap)", expanded=False):
             chart_tr1, chart_tr2 = st.columns([3, 2])
             with chart_tr1:
-                st.markdown(f"**Comparaison superposée ({y_title})**")
-                line_chart = alt.Chart(track_df).mark_line(point=True).encode(
+                st.markdown(f"**Trajectoires lissées comparées ({y_title})**")
+                smooth_multi = alt.Chart(track_df).mark_line(strokeWidth=2.8, interpolate="monotone").encode(
                     x=alt.X("line:O", title="Numéro du vers"),
-                    y=alt.Y(f"{val_col}:Q", title=y_title),
+                    y=alt.Y(f"{smooth_col}:Q", title=f"{y_title} (Lissé)"),
                     color=alt.Color("phoneme:N", title="Phonème / Chaîne", scale=alt.Scale(scheme="category10")),
                     tooltip=[
                         alt.Tooltip("line:O", title="Vers"),
                         alt.Tooltip("stanza:O", title="Strophe"),
-                        alt.Tooltip("syllables:Q", title="Syllabes"),
                         alt.Tooltip("phoneme:N", title="Phonème"),
-                        alt.Tooltip("count:Q", title="Occurrences réelles"),
-                        alt.Tooltip("norm_12:Q", title="Standard 12v", format=".2f"),
-                        alt.Tooltip("oe_ratio:Q", title="Ratio O/E", format=".2f"),
-                        alt.Tooltip("z_line:Q", title="Score z", format="+.2f"),
-                        alt.Tooltip("pct:Q", title="Part (%)", format=".1f"),
-                        alt.Tooltip("cumulative:Q", title="Cumul"),
+                        alt.Tooltip(f"{val_col}:Q", title="Valeur réelle", format=val_format),
+                        alt.Tooltip(f"{smooth_col}:Q", title="Valeur lissée", format=".2f"),
                         alt.Tooltip("text:N", title="Texte"),
-                        alt.Tooltip("ipa:N", title="IPA"),
                     ]
                 ).properties(height=300)
-                st.altair_chart(line_chart, width="stretch")
+                st.altair_chart(smooth_multi, width="stretch")
 
             with chart_tr2:
                 st.markdown(f"**Carte thermique (Heatmap) par vers ({val_tooltip_title})**")
@@ -948,6 +999,60 @@ with tab_phon_chain:
                 width="stretch",
                 hide_index=True
             )
+
+        # ---------------------------------------------------------------------
+        # Section Académique : Synthèse pour citation de recherche & Exports
+        # ---------------------------------------------------------------------
+        st.subheader("🎓 Synthèse stylistique & Exportation pour publication / thèse")
+        st.caption(
+            "Ce module génère les données textuelles et tabulaires formulées selon les normes de la recherche académique en stylistique "
+            "et linguistique poétique. Vous pouvez copier directement les paragraphes et les codes LaTeX / Markdown dans vos travaux."
+        )
+
+        for q_item in target_queries:
+            t_label = q_item["label"]
+            prof = profiles.get(t_label)
+            if not prof:
+                continue
+
+            with st.container(border=True):
+                st.markdown(
+                    f"### Phonème {t_label} ｜ {prof['dyn_label']} "
+                    f"(pente $\\beta = {prof['slope']:+.3f}$, corrélation $r = {prof['correlation_r']:+.2f}$, total = {prof['total_count']} occ.)"
+                )
+
+                st.markdown("**Citation textuelle prête à l'emploi (à insérer dans votre article ou thèse) :**")
+                st.info(prof["academic_citation_fr"])
+
+                # Tableau strophique
+                if prof["strophes_summary"]:
+                    st.markdown("**Évolution strophique détaillée :**")
+                    df_st = pd.DataFrame(prof["strophes_summary"]).rename(columns={
+                        "stanza": "Strophe",
+                        "lines_span": "Vers inclus",
+                        "count": "Occurrences",
+                        "pct": "Part du poème (%)",
+                        "mean_per_line": "Moyenne / vers",
+                    })
+                    st.dataframe(df_st, width="stretch", hide_index=True)
+
+                c_exp1, c_exp2 = st.columns(2)
+                with c_exp1:
+                    with st.expander("Code LaTeX pour inclusion (Overleaf / TeX)", expanded=False):
+                        st.code(prof["latex_table"], language="latex")
+                with c_exp2:
+                    with st.expander("Tableau format Markdown", expanded=False):
+                        st.code(prof["markdown_table"], language="markdown")
+
+        # Téléchargement CSV complet des données
+        csv_export = track_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Télécharger toutes les données vers par vers en CSV",
+            data=csv_export,
+            file_name="dynamique_phonematique_metrique.csv",
+            mime="text/csv",
+            help="Téléchargez l'intégralité des données numériques (occurrences réelles, fréquences normalisées, moyennes mobiles, scores z) pour exploitation dans R, Python ou Excel."
+        )
     else:
         st.info("Veuillez sélectionner au moins un phonème ou une chaîne IPA dans la palette ou le sélecteur ci-dessus.")
 

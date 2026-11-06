@@ -144,3 +144,57 @@ def test_pos_analysis():
     assert r1["rhyme_pos"] in ("NOUN", "ADJ", "VERB", "ADV", "PROPN")
 
 
+def test_compute_phoneme_progression_dynamics():
+    """詩句進展に伴う特定音素の強まり・弱まり（crescendo / decrescendo）、平滑化傾向、論文引用LaTeX/Markdown生成の検証。"""
+    from analysis import compute_phoneme_progression_dynamics
+
+    # Crescendo パターン（詩句の進展に伴い徐々に音素頻度が増加）
+    records_crescendo = [
+        {"line": 1, "stanza": 1, "syllables": 12, "phoneme": "[ʁ]", "count": 1, "norm_12": 1.0, "text": "Vers 1"},
+        {"line": 2, "stanza": 1, "syllables": 12, "phoneme": "[ʁ]", "count": 1, "norm_12": 1.0, "text": "Vers 2"},
+        {"line": 3, "stanza": 1, "syllables": 12, "phoneme": "[ʁ]", "count": 2, "norm_12": 2.0, "text": "Vers 3"},
+        {"line": 4, "stanza": 1, "syllables": 12, "phoneme": "[ʁ]", "count": 2, "norm_12": 2.0, "text": "Vers 4"},
+        {"line": 5, "stanza": 2, "syllables": 12, "phoneme": "[ʁ]", "count": 3, "norm_12": 3.0, "text": "Vers 5"},
+        {"line": 6, "stanza": 2, "syllables": 12, "phoneme": "[ʁ]", "count": 4, "norm_12": 4.0, "text": "Vers 6"},
+        {"line": 7, "stanza": 2, "syllables": 12, "phoneme": "[ʁ]", "count": 5, "norm_12": 5.0, "text": "Vers 7"},
+        {"line": 8, "stanza": 2, "syllables": 12, "phoneme": "[ʁ]", "count": 6, "norm_12": 6.0, "text": "Vers 8"},
+    ]
+    res_cresc = compute_phoneme_progression_dynamics(records_crescendo, smoothing_window=3)
+    prof_c = res_cresc["profiles"]["[ʁ]"]
+
+    assert prof_c["total_count"] == 24
+    assert prof_c["slope"] > 0  # 正の回帰勾配
+    assert prof_c["correlation_r"] > 0.80  # 強い正の相関
+    assert prof_c["dyn_code"] == "crescendo"
+    assert "Renforcement progressif" in prof_c["dyn_label"]
+    assert prof_c["peak_lines"] == [8]
+    assert len(prof_c["strophes_summary"]) == 2
+    assert prof_c["strophes_summary"][1]["count"] > prof_c["strophes_summary"][0]["count"]
+
+    # 論文引用向け出力フォーマットの検証
+    assert "pente de régression linéaire" in prof_c["academic_citation_fr"]
+    assert "\\begin{table}" in prof_c["latex_table"]
+    assert "\\begin{tabular}" in prof_c["latex_table"]
+    assert "| Strophe |" in prof_c["markdown_table"]
+
+    # 平滑化（移動平均）が各行に付与されていること
+    enr = res_cresc["enriched_records"]
+    assert all("rolling_count" in r for r in enr)
+    assert all("rolling_norm_12" in r for r in enr)
+
+    # Decrescendo パターン（詩句の進展に伴い減衰）
+    records_decrescendo = [
+        {"line": 1, "stanza": 1, "syllables": 12, "phoneme": "[s]", "count": 5, "norm_12": 5.0, "text": "Vers 1"},
+        {"line": 2, "stanza": 1, "syllables": 12, "phoneme": "[s]", "count": 4, "norm_12": 4.0, "text": "Vers 2"},
+        {"line": 3, "stanza": 2, "syllables": 12, "phoneme": "[s]", "count": 2, "norm_12": 2.0, "text": "Vers 3"},
+        {"line": 4, "stanza": 2, "syllables": 12, "phoneme": "[s]", "count": 0, "norm_12": 0.0, "text": "Vers 4"},
+    ]
+    res_decresc = compute_phoneme_progression_dynamics(records_decrescendo, smoothing_window=2)
+    prof_d = res_decresc["profiles"]["[s]"]
+    assert prof_d["slope"] < 0
+    assert prof_d["correlation_r"] < -0.80
+    assert prof_d["dyn_code"] == "decrescendo"
+    assert "Atténuation progressive" in prof_d["dyn_label"]
+
+
+
