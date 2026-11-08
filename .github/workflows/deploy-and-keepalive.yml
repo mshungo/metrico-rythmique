@@ -40,6 +40,7 @@ jobs:
         run: |
           python3 - << 'EOF'
           import urllib.request
+          import urllib.error
           import http.cookiejar
           import json
           import time
@@ -75,19 +76,25 @@ jobs:
               r_res = opener.open(req, timeout=30)
               print(f"Resume response HTTP {r_res.status}")
 
-              for i in range(25):
-                  time.sleep(4)
+          # 4. 更新中・再起動中 (status != 5) またはヘルスチェック 502/503 の完了を待機
+          health = ""
+          for i in range(30):
+              try:
                   r_poll = opener.open(f"{APP_URL}/api/v2/app/status", timeout=30)
-                  poll_data = json.loads(r_poll.read().decode("utf-8"))
-                  st_code = poll_data.get("status")
-                  print(f"Poll {i+1}: status={st_code}")
+                  st_code = json.loads(r_poll.read().decode("utf-8")).get("status")
                   if st_code == 5:
-                      break
+                      health = opener.open(f"{APP_URL}/~/+/_stcore/health", timeout=30).read().decode("utf-8").strip()
+                      if health == "ok":
+                          opener.open(f"{APP_URL}/~/+/", timeout=30).read()
+                          print(f"Ready on attempt {i+1}: status={st_code}, health={health}")
+                          break
+              except urllib.error.HTTPError as e:
+                  print(f"Attempt {i+1}: waiting for container reload (HTTP {e.code})...")
+              except Exception as e:
+                  print(f"Attempt {i+1}: waiting ({e})...")
+              time.sleep(4)
 
-          # 4. 内部 Streamlit サーバーのヘルスエンドポイントを確認してアクティブ状態を維持
-          health = opener.open(f"{APP_URL}/~/+/_stcore/health", timeout=30).read().decode("utf-8").strip()
-          opener.open(f"{APP_URL}/~/+/", timeout=30).read()
-          print(f"Streamlit inner health check: {health}")
           if health != "ok":
+              print("Failed to verify health=ok")
               sys.exit(1)
           EOF
