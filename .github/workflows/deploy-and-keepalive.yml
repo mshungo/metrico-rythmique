@@ -1,0 +1,93 @@
+name: Streamlit Cloud Sync & Keep-Alive
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # 6時間ごとにヘルスチェックとスリープ自動復帰を実行し常時公開状態を維持
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  test-on-push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run unit and app tests
+        run: pytest -q
+
+  sync-and-keepalive:
+    needs: [test-on-push]
+    if: always() && (needs.test-on-push.result == 'success' || needs.test-on-push.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake up & verify https://metrythme.streamlit.app/
+        run: |
+          python3 - << 'EOF'
+          import urllib.request
+          import http.cookiejar
+          import json
+          import time
+          import sys
+
+          APP_URL = "https://metrythme.streamlit.app"
+          cj = http.cookiejar.CookieJar()
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+          opener.addheaders = [("User-Agent", "Mozilla/5.0 (GitHub-Actions-KeepAlive)")]
+
+          # 1. セッション初期化
+          opener.open(f"{APP_URL}/", timeout=30)
+
+          # 2. 現在の稼働ステータスと CSRF トークンを取得
+          resp = opener.open(f"{APP_URL}/api/v2/app/status", timeout=30)
+          csrf = resp.headers.get("x-csrf-token", "")
+          status_data = json.loads(resp.read().decode("utf-8"))
+          st_code = status_data.get("status")
+          print(f"Initial Streamlit Cloud status: {st_code} ({status_data})")
+
+          # 3. スリープ状態 (status == 12: IS_SHUTDOWN) の場合は自動復帰 (resume) を実行
+          if st_code == 12 and csrf:
+              print("App is sleeping (IS_SHUTDOWN). Sending resume request...")
+              req = urllib.request.Request(
+                  f"{APP_URL}/api/v2/app/resume",
+                  data=b"{}",
+                  headers={
+                      "x-csrf-token": csrf,
+                      "Content-Type": "application/json",
+                  },
+                  method="POST",
+              )
+              r_res = opener.open(req, timeout=30)
+              print(f"Resume response HTTP {r_res.status}")
+
+              for i in range(25):
+                  time.sleep(4)
+                  r_poll = opener.open(f"{APP_URL}/api/v2/app/status", timeout=30)
+                  poll_data = json.loads(r_poll.read().decode("utf-8"))
+                  st_code = poll_data.get("status")
+                  print(f"Poll {i+1}: status={st_code}")
+                  if st_code == 5:
+                      break
+
+          # 4. 内部 Streamlit サーバーのヘルスエンドポイントを確認してアクティブ状態を維持
+          health = opener.open(f"{APP_URL}/~/+/_stcore/health", timeout=30).read().decode("utf-8").strip()
+          opener.open(f"{APP_URL}/~/+/", timeout=30).read()
+          print(f"Streamlit inner health check: {health}")
+          if health != "ok":
+              sys.exit(1)
+          EOF
