@@ -58,7 +58,7 @@ def test_app_labe_preset():
 
 
 def test_app_mallarme_preset():
-    """サンプル6（Mallarmé : À la nue accablante tu 八音節詩）が例外なく描画されること。"""
+    """サンプル6（Mallarmé : À la nue accablante tu 八音節詩）およびMeschonnicのSVG連結線（カウンターアクセント弧・子音連鎖線）が例外なく描画されること。"""
     at = AppTest.from_file(APP_PATH, default_timeout=30)
     at.run()
     preset_sb = at.sidebar.selectbox[0]
@@ -66,4 +66,6 @@ def test_app_mallarme_preset():
     preset_sb.set_value(preset_sb.options[6]).run()
     assert not at.exception
     assert len(at.tabs) == 5
+    assert any("<svg" in h.value and "contre-accents" in h.value for h in at.html)
+
 

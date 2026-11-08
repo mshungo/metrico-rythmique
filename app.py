@@ -177,39 +177,174 @@ def format_scansion_mark_html(mark: str) -> str:
     return html.escape(mark)
 
 
-def render_scansion_html(mesch_lines, dom_consonants):
-    """Rendu visuel de la scansion syllabique et accentuelle par vers."""
+MESCH_CHAIN_PALETTE = [
+    "#dc2626", "#2563eb", "#059669", "#d97706", "#7c3aed", "#db2777",
+    "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#be123c", "#0d9488",
+]
+
+
+def render_scansion_html(
+    mesch_lines,
+    dom_consonants,
+    show_contre_arcs=True,
+    only_inter_contre=False,
+    show_rebonds_e=True,
+    show_chain_lines=True,
+    show_vocalic_lines=False,
+):
+    """Partition rythmique et prosodique de Meschonnic & Dessons :
+    - Zone supérieure (SVG) : Arcs de liaison des contre-accents (1─2, 1─2─3) et rebonds rythmiques sur e caduc.
+    - Zone centrale (Grille) : Signes de scansion (—, ⏓, ⏑ˈ, ◡), syllabes orthographiques, césure et IPA.
+    - Zone inférieure (SVG) : Lignes et courbes souscrites reliant les mêmes consonnes / voyelles par piste dédiée.
+    """
     dom_set = {d["consonant"] for d in dom_consonants[:3]}
+    ph_color_map = {}
+    for idx_d, d in enumerate(dom_consonants):
+        ph_color_map[d["consonant"]] = MESCH_CHAIN_PALETTE[idx_d % len(MESCH_CHAIN_PALETTE)]
+
+    def get_ph_color(ph):
+        base_ph = ph.split("↩")[0].split("↪")[0].split("#")[0].replace("‿", "")
+        if base_ph not in ph_color_map:
+            ph_color_map[base_ph] = MESCH_CHAIN_PALETTE[len(ph_color_map) % len(MESCH_CHAIN_PALETTE)]
+        return ph_color_map[base_ph]
+
+    label_w = 112
+    col_w = 70
+
     cards = [
         """<style>
-        .mesch-box { font-family: 'Segoe UI', -apple-system, sans-serif; margin-bottom: 10px; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff; }
-        .mesch-hdr { font-size: 0.82rem; color: #475569; margin-bottom: 6px; font-weight: 600; }
-        .mesch-row { display: flex; flex-wrap: wrap; gap: 3px; align-items: flex-end; }
-        .mesch-cell { display: inline-flex; flex-direction: column; align-items: center; padding: 3px 5px; border-radius: 5px; min-width: 28px; }
-        .mesch-R { background: #eff6ff; border-bottom: 2px solid #1d4ed8; }
-        .mesch-M { background: #fef3c7; border-bottom: 2px solid #d97706; }
-        .mesch-P { background: #fdf2f8; border-bottom: 2px solid #be185d; }
+        .mesch-box { font-family: 'Segoe UI', -apple-system, sans-serif; margin-bottom: 12px; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; box-shadow: 0 1px 2px rgba(15,23,42,0.03); }
+        .mesch-hdr { font-size: 0.82rem; color: #334155; margin-bottom: 6px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .mesch-badge-ca { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 999px; padding: 1px 8px; font-size: 0.73rem; font-weight: 700; }
+        .mesch-badge-reb { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; border-radius: 999px; padding: 1px 8px; font-size: 0.73rem; font-weight: 600; }
+        .mesch-badge-ch { color: #ffffff; border-radius: 999px; padding: 1px 7px; font-size: 0.72rem; font-family: monospace; font-weight: 700; }
+        .mesch-scroll { overflow-x: auto; padding-bottom: 2px; }
+        .mesch-grid-tbl { border-collapse: collapse; table-layout: fixed; margin: 0; }
+        .mesch-lbl-td { width: 112px; min-width: 112px; max-width: 112px; text-align: right; padding-right: 10px; font-size: 0.72rem; color: #64748b; font-weight: 600; white-space: nowrap; user-select: none; }
+        .mesch-syl-td { width: 70px; min-width: 70px; max-width: 70px; text-align: center; padding: 2px 3px; vertical-align: middle; box-sizing: border-box; }
+        .mesch-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3px 2px; border-radius: 6px; min-height: 54px; }
+        .mesch-R { background: #eff6ff; border-bottom: 2.5px solid #1d4ed8; }
+        .mesch-M { background: #fef3c7; border-bottom: 2.5px solid #d97706; }
+        .mesch-P { background: #fdf2f8; border-bottom: 2.5px solid #be185d; }
         .mesch-U { background: #f8fafc; border-bottom: 1px solid #cbd5e1; }
-        .mesch-ext { background: #f8fafc; border-bottom: 1px dashed #94a3b8; border-left: none; margin-left: -2px; }
+        .mesch-ext { background: #f8fafc; border-bottom: 1px dashed #94a3b8; opacity: 0.82; }
         .mesch-ext .mesch-orth { font-style: italic; color: #64748b; }
-        .mesch-ext .mesch-mark { font-size: 0.85rem; color: #94a3b8; min-height: 18px; }
-        .mesch-sup { font-size: 0.70rem; font-weight: 700; color: #dc2626; min-height: 14px; }
-        .mesch-mark { font-size: 1.05rem; font-weight: 700; color: #0f172a; line-height: 1.2; min-height: 22px; display: inline-flex; align-items: center; justify-content: center; }
+        .mesch-ext .mesch-mark { font-size: 0.82rem; color: #64748b; min-height: 20px; }
+        .mesch-sup { font-size: 0.68rem; font-weight: 700; color: #dc2626; min-height: 12px; line-height: 1; }
+        .mesch-mark { font-size: 1.05rem; font-weight: 700; color: #0f172a; line-height: 1.15; min-height: 22px; display: inline-flex; align-items: center; justify-content: center; gap: 2px; }
+        .mesch-trig { font-size: 0.66rem; font-family: monospace; font-weight: 700; color: #be185d; background: #fce7f3; border-radius: 3px; padding: 0 3px; }
         .mesch-stacked { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; position: relative; top: -1px; }
         .mesch-stacked-top { font-size: 0.65rem; line-height: 0.45; margin-bottom: -1px; font-weight: 900; color: #0f172a; }
         .mesch-stacked-base { font-size: 1.05rem; line-height: 0.9; color: #0f172a; }
-        .mesch-orth { font-size: 0.88rem; color: #1e293b; margin-top: 2px; }
-        .mesch-ipa { font-size: 0.74rem; color: #64748b; }
+        .mesch-orth { font-size: 0.88rem; color: #0f172a; margin-top: 2px; white-space: nowrap; }
+        .mesch-orth-lex { font-weight: 700; color: #0f172a; }
+        .mesch-orth-coop { font-weight: 600; color: #1e40af; border-bottom: 1.5px dashed #3b82f6; }
+        .mesch-orth-tool { color: #64748b; }
+        .mesch-ipa { font-size: 0.73rem; color: #64748b; font-family: monospace; margin-top: 1px; }
         .mesch-echo { color: #be185d; font-weight: 700; }
-        .mesch-bar { font-size: 1.25rem; font-weight: 700; color: #0284c7; padding: 0 4px; align-self: center; }
-        .mesch-gap { width: 8px; }
         </style>"""
     ]
+
     for l_obj in mesch_lines:
-        if not l_obj["syllable_tokens"]:
+        toks = l_obj.get("syllable_tokens", [])
+        if not toks:
             continue
-        cells_html = []
-        for tok in l_obj["syllable_tokens"]:
+        n_tok = len(toks)
+        total_w = label_w + n_tok * col_w + 16
+
+        def x_center(idx):
+            return label_w + idx * col_w + (col_w / 2.0)
+
+        # --- 1. Zone supérieure SVG : Arcs des contre-accents & Rebonds sur e caduc ---
+        ca_list = [
+            ca for ca in l_obj.get("contre_accents", [])
+            if not (only_inter_contre and ca.get("scope") == "intra-lexical")
+        ]
+        reb_list = l_obj.get("rebonds_e_caduc", []) if show_rebonds_e else []
+        top_svg_html = ""
+        if show_contre_arcs and (ca_list or reb_list):
+            top_h = 48
+            svg_top = [
+                f'<svg width="{total_w}" height="{top_h}" style="display:block; overflow:visible;">',
+                f'<text x="{label_w - 10}" y="30" text-anchor="end" fill="#64748b" font-size="11" font-weight="600" font-family="Segoe UI, sans-serif">contre-accents</text>',
+            ]
+            # (a) Rebonds rythmiques sur e caduc (arcs pointillés ambre)
+            for reb in reb_list:
+                p1 = reb.get("pos_start", 0)
+                pe = reb.get("pos_pivot_e", p1 + 1)
+                p2 = reb.get("pos_end", p1 + 2)
+                if p2 >= n_tok:
+                    continue
+                x1, xe, x2 = x_center(p1), x_center(pe), x_center(p2)
+                xm = (x1 + x2) / 2.0
+                tip = html.escape(f"Rebond rythmique sur e caduc : {reb.get('span', '')} ({reb.get('type', '')})")
+                svg_top.append(
+                    f'<g><title>{tip}</title>'
+                    f'<path d="M {x1:.1f} 42 Q {xm:.1f} 4 {x2:.1f} 42" fill="none" stroke="#d97706" stroke-width="1.9" stroke-dasharray="4,3"/>'
+                    f'<circle cx="{xe:.1f}" cy="24" r="3" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>'
+                    f'<rect x="{xm - 22:.1f}" y="6" width="44" height="14" rx="7" fill="#fffbeb" stroke="#fcd34d" stroke-width="1"/>'
+                    f'<text x="{xm:.1f}" y="16" text-anchor="middle" fill="#b45309" font-size="9.5" font-weight="700" font-family="monospace">↷ -{html.escape(reb.get("pivot_orth", "e"))}</text>'
+                    f'</g>'
+                )
+
+            # (b) Contre-accents directs (arcs pleins inter-lexicaux / tiretés intra-lexicaux)
+            for ca in ca_list:
+                p1 = ca.get("pos_start")
+                p2 = ca.get("pos_end")
+                if p1 is None or p2 is None or p2 >= n_tok:
+                    continue
+                x1, x2 = x_center(p1), x_center(p2)
+                xm = (x1 + x2) / 2.0
+                ca_type = ca.get("type", "R-R")
+                is_inter = ca.get("scope", "inter-lexical") == "inter-lexical"
+                if ca_type in ("R-R", "M-R", "R-M"):
+                    col_ca = "#dc2626"
+                    bg_ca = "#fef2f2"
+                elif ca_type in ("P-R", "R-P"):
+                    col_ca = "#7c3aed"
+                    bg_ca = "#f5f3ff"
+                else:
+                    col_ca = "#db2777"
+                    bg_ca = "#fdf2f8"
+                dash_attr = '' if is_inter else 'stroke-dasharray="3,2"'
+                sw = "2.6" if is_inter else "2.0"
+                lbl_ca = f"{ca_type}{'⁀' if ca.get('ligature') else ''}"
+                tip = html.escape(
+                    f"Contre-accent {ca_type} ({'inter-mots' if is_inter else 'intra-mot'}) : {ca.get('span', '')}"
+                )
+                bw = max(28, len(lbl_ca) * 6.5 + 8)
+                svg_top.append(
+                    f'<g><title>{tip}</title>'
+                    f'<path d="M {x1:.1f} 42 Q {xm:.1f} 10 {x2:.1f} 42" fill="none" stroke="{col_ca}" stroke-width="{sw}" {dash_attr}/>'
+                    f'<circle cx="{x1:.1f}" cy="42" r="3.2" fill="{col_ca}"/>'
+                    f'<circle cx="{x2:.1f}" cy="42" r="3.2" fill="{col_ca}"/>'
+                    f'<rect x="{xm - bw / 2:.1f}" y="9" width="{bw:.1f}" height="15" rx="7.5" fill="{bg_ca}" stroke="{col_ca}" stroke-width="1.2"/>'
+                    f'<text x="{xm:.1f}" y="19.5" text-anchor="middle" fill="{col_ca}" font-size="9.5" font-weight="700" font-family="monospace">{html.escape(lbl_ca)}</text>'
+                    f'</g>'
+                )
+
+            # (c) Pastilles numérotées 1, 2, 3 des contre-accents
+            for k_idx, tok in enumerate(toks):
+                c_num = tok.get("contre_num")
+                if c_num is not None:
+                    xk = x_center(k_idx)
+                    svg_top.append(
+                        f'<circle cx="{xk:.1f}" cy="40" r="7" fill="#dc2626" stroke="#ffffff" stroke-width="1.2"/>'
+                        f'<text x="{xk:.1f}" y="43.5" text-anchor="middle" fill="#ffffff" font-size="9.5" font-weight="800" font-family="Segoe UI, sans-serif">{c_num}</text>'
+                    )
+            svg_top.append("</svg>")
+            top_svg_html = "".join(svg_top)
+
+        # --- 2. Zone centrale : Grille syllabique alignée ---
+        cols_html = [f'<col style="width:{label_w}px">'] + [f'<col style="width:{col_w}px">' for _ in range(n_tok)]
+        tds_html = [
+            '<td class="mesch-lbl-td">'
+            '<div>scansion</div>'
+            '<div style="margin-top:4px;">syllabes</div>'
+            '<div style="margin-top:2px; font-family:monospace;">[IPA]</div>'
+            '</td>'
+        ]
+        for k_idx, tok in enumerate(toks):
             orig = tok["origin"]
             cls = (
                 "mesch-R" if orig == "R"
@@ -218,7 +353,7 @@ def render_scansion_html(mesch_lines, dom_consonants):
                 else ("mesch-ext" if orig == "ext"
                 else "mesch-U")))
             )
-            sup_txt = str(tok["contre_num"]) if tok["contre_num"] is not None else ""
+            sup_txt = str(tok["contre_num"]) if (tok["contre_num"] is not None and not show_contre_arcs) else ""
             if tok["ligature_after"]:
                 sup_txt += "⁀"
             has_dom_echo = any(c in dom_set for c in tok.get("onset_cons", []))
@@ -226,24 +361,189 @@ def render_scansion_html(mesch_lines, dom_consonants):
             orth_esc = html.escape(tok["orth"] + (tok["punct_after"] or ""))
             ipa_esc = html.escape(tok["ipa"])
             mark_html = format_scansion_mark_html(tok.get("mark"))
-            cells_html.append(
+            triggers = tok.get("chain_triggers", [])
+            trig_html = (
+                f'<span class="mesch-trig">[{html.escape(",".join(triggers[:2]))}]</span>'
+                if triggers else ""
+            )
+
+            w_pos = tok.get("word_pos", "")
+            is_lex = w_pos in ("NOUN", "VERB", "ADJ", "ADV", "PROPN")
+            if orig == "ext":
+                orth_cls = "mesch-orth"
+            elif is_lex:
+                orth_cls = "mesch-orth mesch-orth-lex"
+            elif triggers:
+                orth_cls = "mesch-orth mesch-orth-coop"
+            else:
+                orth_cls = "mesch-orth mesch-orth-tool"
+
+            b_left = "border-left: 2px solid #cbd5e1;" if (tok.get("is_word_start") and k_idx > 0) else ""
+            b_right = "border-right: 3.5px double #0284c7;" if tok.get("caesura_after") else ""
+            sup_span_html = f'<span class="mesch-sup">{html.escape(sup_txt)}</span>' if sup_txt else ""
+
+            tds_html.append(
+                f'<td class="mesch-syl-td" style="{b_left}{b_right}">'
                 f'<div class="mesch-cell {cls}">'
-                f'<span class="mesch-sup">{html.escape(sup_txt)}</span>'
-                f'<span class="mesch-mark">{mark_html}</span>'
-                f'<span class="mesch-orth">{orth_esc}</span>'
+                f'{sup_span_html}'
+                f'<span class="mesch-mark">{mark_html}{trig_html}</span>'
+                f'<span class="{orth_cls}">{orth_esc}</span>'
                 f'<span class="{ipa_cls}">[{ipa_esc}]</span>'
                 f'</div>'
+                f'</td>'
             )
-            if tok["caesura_after"]:
-                cells_html.append('<span class="mesch-bar" title="Césure">│</span>')
-            elif tok["is_word_end"]:
-                cells_html.append('<span class="mesch-gap"></span>')
+
+        mid_tbl_html = (
+            f'<table class="mesch-grid-tbl" style="width:{total_w}px;">'
+            f'<colgroup>{"".join(cols_html)}</colgroup>'
+            f'<tr>{"".join(tds_html)}</tr>'
+            f'</table>'
+        )
+
+        # --- 3. Zone inférieure SVG : Lignes de liaison des chaînes consonantiques & vocaliques ---
+        bot_svg_html = ""
+        tracks = []
+        if show_chain_lines:
+            for ch in l_obj.get("active_chains", []):
+                pos_list = ch.get("positions", [])
+                kind = ch.get("kind", "")
+                if len(pos_list) >= 2 or kind == "reprise_inter_vers":
+                    tracks.append(("C", ch))
+        if show_vocalic_lines:
+            for vs in l_obj.get("vocalic_series", []):
+                v_pos = [p - 1 for p in vs.get("positions", []) if 0 <= p - 1 < n_tok]
+                if len(v_pos) >= 2:
+                    tracks.append(("V", {
+                        "phoneme": vs["vowel"],
+                        "label": f"[{vs['vowel']}]",
+                        "positions": v_pos,
+                        "kind": "serie_vocalique",
+                        "span_desc": " ↔ ".join(vs.get("words", [])),
+                    }))
+
+        if tracks:
+            row_h = 26
+            bot_h = len(tracks) * row_h + 10
+            svg_bot = [f'<svg width="{total_w}" height="{bot_h}" style="display:block; overflow:visible;">']
+            # Lignes guides verticales subtiles au centre de chaque syllabe
+            for k_idx in range(n_tok):
+                xk = x_center(k_idx)
+                svg_bot.append(
+                    f'<line x1="{xk:.1f}" y1="0" x2="{xk:.1f}" y2="{bot_h - 4}" stroke="#f1f5f9" stroke-width="1"/>'
+                )
+
+            for t_idx, (t_type, ch) in enumerate(tracks):
+                yt = 15 + t_idx * row_h
+                ph = ch["phoneme"]
+                colr = get_ph_color(ph) if t_type == "C" else "#0d9488"
+                pos_list = [p for p in ch.get("positions", []) if 0 <= p < n_tok]
+                if not pos_list:
+                    continue
+                kind = ch.get("kind", "serie_consonantique")
+                lbl_txt = ch.get("label", f"[{ph}]")
+                kind_short = (
+                    "hiatus" if kind == "hiatus_de_consonnes"
+                    else ("liais." if kind == "liaison_renforcee"
+                    else ("rebond" if kind == "reprise_inter_vers"
+                    else ("voy." if t_type == "V" else f"{len(pos_list)} syll.")))
+                )
+                svg_bot.append(
+                    f'<text x="{label_w - 10}" y="{yt + 4}" text-anchor="end" fill="{colr}" font-size="11.5" font-weight="700" font-family="monospace">'
+                    f'{html.escape(lbl_txt)} <tspan fill="#64748b" font-size="10" font-weight="500" font-family="Segoe UI, sans-serif">{html.escape(kind_short)}</tspan></text>'
+                )
+
+                # Connecteurs entre positions consécutives
+                if len(pos_list) >= 2:
+                    x_first = x_center(pos_list[0])
+                    x_last = x_center(pos_list[-1])
+                    dash_line = 'stroke-dasharray="4,3"' if t_type == "V" else ""
+                    # Barre d'empan continue
+                    svg_bot.append(
+                        f'<line x1="{x_first:.1f}" y1="{yt}" x2="{x_last:.1f}" y2="{yt}" stroke="{colr}" stroke-opacity="0.25" stroke-width="4" stroke-linecap="round"/>'
+                    )
+                    # Courbes de liaison entre maillons consécutifs
+                    for m_i in range(len(pos_list) - 1):
+                        pa, pb = pos_list[m_i], pos_list[m_i + 1]
+                        xa, xb = x_center(pa), x_center(pb)
+                        xm = (xa + xb) / 2.0
+                        gap = pb - pa
+                        svg_bot.append(
+                            f'<path d="M {xa:.1f} {yt} Q {xm:.1f} {yt + 9:.1f} {xb:.1f} {yt}" fill="none" stroke="{colr}" stroke-width="2.0" {dash_line}/>'
+                        )
+                        if gap >= 2 or kind == "hiatus_de_consonnes":
+                            g_lbl = "#" if kind == "hiatus_de_consonnes" else f"Δ{gap}"
+                            svg_bot.append(
+                                f'<text x="{xm:.1f}" y="{yt + 11.5:.1f}" text-anchor="middle" fill="{colr}" font-size="8.5" font-weight="700" font-family="monospace">{g_lbl}</text>'
+                            )
+                elif kind == "reprise_inter_vers":
+                    p0 = pos_list[0]
+                    x0 = x_center(p0)
+                    if "↩" in lbl_txt:
+                        svg_bot.append(
+                            f'<path d="M {label_w + 4:.1f} {yt - 6} Q {(label_w + x0) / 2:.1f} {yt + 8} {x0:.1f} {yt}" fill="none" stroke="{colr}" stroke-width="2" stroke-dasharray="3,2"/>'
+                        )
+                    else:
+                        x_end = min(total_w - 6, x0 + col_w * 0.8)
+                        svg_bot.append(
+                            f'<path d="M {x0:.1f} {yt} Q {(x0 + x_end) / 2:.1f} {yt + 8} {x_end:.1f} {yt - 5}" fill="none" stroke="{colr}" stroke-width="2" stroke-dasharray="3,2"/>'
+                        )
+
+                # Nœuds sur chaque syllabe participante (● mot plein vs ◉ mot outil coopérant)
+                base_ph = ph.split("↩")[0].split("↪")[0].split("#")[0].replace("‿", "")
+                for p_idx in pos_list:
+                    xp = x_center(p_idx)
+                    tok_p = toks[p_idx]
+                    is_lex_node = tok_p.get("word_pos", "") in ("NOUN", "VERB", "ADJ", "ADV", "PROPN")
+                    role_lbl = "mot plein pivot" if is_lex_node else "mot grammatical coopérant dans le continu rythmique"
+                    node_tip = html.escape(f"s{p_idx + 1} « {tok_p['word_text']} » ({tok_p['orth']}) — {role_lbl} · chaîne [{base_ph}]")
+                    if is_lex_node:
+                        svg_bot.append(
+                            f'<g><title>{node_tip}</title>'
+                            f'<circle cx="{xp:.1f}" cy="{yt}" r="8.5" fill="{colr}" stroke="#ffffff" stroke-width="1.5"/>'
+                            f'<text x="{xp:.1f}" y="{yt + 3.5}" text-anchor="middle" fill="#ffffff" font-size="10.5" font-weight="700" font-family="monospace">{html.escape(base_ph)}</text>'
+                            f'</g>'
+                        )
+                    else:
+                        svg_bot.append(
+                            f'<g><title>{node_tip}</title>'
+                            f'<circle cx="{xp:.1f}" cy="{yt}" r="8.5" fill="#ffffff" stroke="{colr}" stroke-width="2.5"/>'
+                            f'<text x="{xp:.1f}" y="{yt + 3.5}" text-anchor="middle" fill="{colr}" font-size="10.5" font-weight="800" font-family="monospace">{html.escape(base_ph)}</text>'
+                            f'</g>'
+                        )
+            svg_bot.append("</svg>")
+            bot_svg_html = "".join(svg_bot)
 
         vol_str = " + ".join(map(str, l_obj["group_volumes"])) if l_obj["group_volumes"] else "-"
+        hdr_badges = []
+        for ca in ca_list:
+            hdr_badges.append(
+                f'<span class="mesch-badge-ca" title="Contre-accent {html.escape(ca["scope"])}">'
+                f'╭─╮ {html.escape(ca["type"])} : {html.escape(ca["span"])}</span>'
+            )
+        for reb in reb_list:
+            hdr_badges.append(
+                f'<span class="mesch-badge-reb" title="Rebond rythmique sur e caduc">'
+                f'↷ {html.escape(reb["span"])}</span>'
+            )
+        for ch in l_obj.get("active_chains", []):
+            if len(ch.get("positions", [])) >= 2:
+                c_col = get_ph_color(ch["phoneme"])
+                hdr_badges.append(
+                    f'<span class="mesch-badge-ch" style="background:{c_col};" title="{html.escape(ch.get("span_desc", ""))}">'
+                    f'{html.escape(ch["label"])}×{len(ch["positions"])}</span>'
+                )
+
         cards.append(
             f'<div class="mesch-box">'
-            f'<div class="mesch-hdr">Vers {l_obj["line"]} ｜ Mesures rythmiques : [{vol_str}]</div>'
-            f'<div class="mesch-row">{"".join(cells_html)}</div>'
+            f'<div class="mesch-hdr">'
+            f'<span>Vers {l_obj["line"]} ｜ Mesures rythmiques : [{vol_str}]</span>'
+            f'{"".join(hdr_badges)}'
+            f'</div>'
+            f'<div class="mesch-scroll">'
+            f'{top_svg_html}'
+            f'{mid_tbl_html}'
+            f'{bot_svg_html}'
+            f'</div>'
             f'</div>'
         )
     return "\n".join(cards)
@@ -463,22 +763,39 @@ with tab_vers:
     }
     st.dataframe(lines_detail_df[master_cols].rename(columns=master_rename), width="stretch", hide_index=True)
 
-    st.subheader("Scansion rythmique et découpage syllabique")
+    st.subheader("Scansion rythmique et découpage syllabique (Partition Dessons & Meschonnic)")
     st.html(
-        '<div style="font-size:0.85rem; color:#64748b; margin-bottom:10px;">'
-        '<strong>Légende :</strong> '
-        '<code style="font-weight:700;">—</code> Accent tonique / métrique ｜ '
-        '<code style="font-weight:700;">⏓</code> Accent expressif ｜ '
+        '<div style="font-size:0.84rem; color:#475569; margin-bottom:8px; line-height:1.6;">'
+        '<strong>Légende de la partition :</strong> '
+        '<code style="font-weight:700;">—</code> Accent rythmique / métrique ｜ '
+        '<code style="font-weight:700;">⏓</code> Accent expressif / ambivalent ｜ '
         '<span style="background:#f1f5f9; padding:1px 5px; border-radius:4px; font-family:monospace; font-weight:700; display:inline-flex; flex-direction:column; align-items:center; vertical-align:middle; line-height:1; position:relative; top:-2px;">'
         '<span style="font-size:0.65em; line-height:0.45; margin-bottom:-1px; color:#0f172a;">ˈ</span>'
         '<span style="font-size:1em; line-height:0.9; color:#0f172a;">⏑</span>'
-        '</span> Accent prosodique (écho phonématique) ｜ '
+        '</span> Accent prosodique (syllabe activée par chaîne) ｜ '
         '<code style="font-weight:700;">◡</code> Syllabe atone ｜ '
-        '<code style="font-weight:700;">│</code> Césure ｜ '
-        '<span style="color:#be185d; font-weight:700;">Rose</span> : Écho consonantique dominant'
+        '<span style="color:#dc2626; font-weight:700;">╭─╮ ①─②</span> Arc de <strong>contre-accent</strong> (collision d\'accents adjacents : '
+        '<span style="color:#dc2626;">R–R</span>, <span style="color:#7c3aed;">P–R / R–P</span>, <span style="color:#db2777;">P–P</span>) ｜ '
+        '<span style="color:#d97706; font-weight:700;">╭ ╌ ╮ ↷ -e</span> Rebond rythmique sur <em>e</em> caduc ｜ '
+        '<span style="color:#2563eb; font-weight:700;">●───◉───●</span> Lignes souscrites des chaînes consonantiques '
+        '(<strong>●</strong> mot plein pivot · <strong>◉</strong> mot grammatical coopérant dans le continu rythmique)'
         '</div>'
     )
-    st.html(render_scansion_html(mesch["lines"], mesch["dominant_consonant_series"]))
+    sc_opt1, sc_opt2, sc_opt3, sc_opt4 = st.columns(4)
+    show_ca_t1 = sc_opt1.checkbox("Arcs des contre-accents (╭─╮)", value=True, key="t1_show_ca")
+    show_reb_t1 = sc_opt2.checkbox("Rebonds sur e caduc (↷ -e)", value=True, key="t1_show_reb")
+    show_ch_t1 = sc_opt3.checkbox("Lignes des chaînes consonantiques", value=True, key="t1_show_ch")
+    show_voc_t1 = sc_opt4.checkbox("Lignes des séries vocaliques", value=False, key="t1_show_voc")
+    st.html(
+        render_scansion_html(
+            mesch["lines"],
+            mesch["dominant_consonant_series"],
+            show_contre_arcs=show_ca_t1,
+            show_rebonds_e=show_reb_t1,
+            show_chain_lines=show_ch_t1,
+            show_vocalic_lines=show_voc_t1,
+        )
+    )
 
     with st.expander("Inspecteur détaillé d'un vers (Zoom métrique et rythmique)", expanded=False):
         selected_line_idx = st.selectbox(
@@ -603,6 +920,67 @@ with tab_rythme:
     st.subheader("Phrasé prosodique et arcs accentuels")
     st.html(render_phrasing_html(lines_detail))
 
+    st.divider()
+    st.subheader("Analyse rythmique de Meschonnic & Dessons : Contre-accents, Rebonds et Figures d'écho")
+    st.caption(
+        "Dans le *Traité du rythme* (Dessons & Meschonnic, 1998), la tension rythmique naît des **contre-accents** "
+        "(deux ou plusieurs syllabes accentuées consécutives, reliées par des arcs `╭─╮` et numérotées `1, 2, 3`), "
+        "des **rebonds rythmiques sur e caduc** (`accent + e post-tonique + accent`, reliés par `╭ ╌ ╮`) et des **figures d'écho prosodique**."
+    )
+    all_ca_events = [ca for ml in mesch["lines"] for ca in ml.get("contre_accents", [])]
+    inter_ca_events = [ca for ca in all_ca_events if ca.get("scope") == "inter-lexical"]
+    intra_ca_events = [ca for ca in all_ca_events if ca.get("scope") == "intra-lexical"]
+    all_reb_events = [rb for ml in mesch["lines"] for rb in ml.get("rebonds_e_caduc", [])]
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("Contre-accents (inter-mots)", len(inter_ca_events),
+               help=f"Plus {len(intra_ca_events)} contre-accents intra-lexicaux (attaque prosodique + tonique dans un même mot)")
+    mc2.metric("Rebonds sur e caduc (↷ -e)", len(all_reb_events),
+               help="Deux syllabes accentuées séparées uniquement par une syllabe féminine post-tonique (-e)")
+    mc3.metric("Plateaux rythmiques (≥ 3 accents)", len(mesch.get("plateaux_rythmiques", [])))
+    mc4.metric("Figures d'écho & Superlatifs", len(mesch.get("echo_figures", [])))
+
+    ca_col1, ca_col2 = st.columns(2)
+    with ca_col1:
+        st.markdown("**Répartition des contre-accents et rebonds rythmiques**")
+        ca_rows = []
+        for ca in all_ca_events:
+            ca_rows.append({
+                "Vers": f"V{ca['line']}",
+                "Syllabes": f"s{ca.get('syl_start', '?')}─s{ca.get('syl_end', '?')}",
+                "Type": ca["type"] + (" ⁀" if ca.get("ligature") else ""),
+                "Portée": "Inter-mots" if ca.get("scope") == "inter-lexical" else "Intra-mot",
+                "Segment relié": ca["span"],
+            })
+        for rb in all_reb_events:
+            ca_rows.append({
+                "Vers": f"V{rb['line']}",
+                "Syllabes": f"s{rb.get('syl_start', '?')}↷s{rb.get('syl_end', '?')}",
+                "Type": rb["type"],
+                "Portée": "Rebond sur -e",
+                "Segment relié": rb["span"],
+            })
+        if ca_rows:
+            st.dataframe(pd.DataFrame(ca_rows), width="stretch", hide_index=True)
+        else:
+            st.info("Aucun contre-accent détecté dans ce texte.")
+
+    with ca_col2:
+        st.markdown("**Les 7 Figures d'écho prosodique & Superlatifs (Dessons & Meschonnic, pp. 170–172)**")
+        echo_list = mesch.get("echo_figures", [])
+        if echo_list:
+            echo_df = pd.DataFrame([
+                {
+                    "Vers": f"V{ef['line']}",
+                    "Figure d'écho": ef["label"],
+                    "Mots reliés / Exemple": ef["example"],
+                }
+                for ef in echo_list
+            ])
+            st.dataframe(echo_df, width="stretch", hide_index=True)
+        else:
+            st.info("Aucune figure d'écho particulière détectée.")
+
 
 # -----------------------------------------------------------------------------
 # Onglet 3 : Chaînes phonématiques & Recherche IPA
@@ -652,11 +1030,23 @@ with tab_phon_chain:
         m4.metric("Séries dominantes", dom_txt)
 
         # ---------- 1. Notation souscrite d'un vers ----------
-        st.markdown("**Notation souscrite des séries et de la coopération rythmique (vers par vers)**")
+        st.markdown("**Partition et notation souscrite des séries, contre-accents et coopération rythmique (vers par vers)**")
         line_opts = [f"V{ll['line']} — {ll['text']}" for ll in lx_lines]
         default_idx = lx_lines.index(best_line)
         sel_lbl = st.selectbox("Vers à analyser", line_opts, index=default_idx, key="lx_line_sel")
-        cur = lx_lines[line_opts.index(sel_lbl)]
+        sel_v_idx = line_opts.index(sel_lbl)
+        cur = lx_lines[sel_v_idx]
+        if sel_v_idx < len(mesch.get("lines", [])):
+            st.html(
+                render_scansion_html(
+                    [mesch["lines"][sel_v_idx]],
+                    mesch["dominant_consonant_series"],
+                    show_contre_arcs=True,
+                    show_rebonds_e=True,
+                    show_chain_lines=True,
+                    show_vocalic_lines=True,
+                )
+            )
         sylls = cur["syllables"]
         n_s = len(sylls)
         coop_syl_set = {
@@ -696,7 +1086,7 @@ with tab_phon_chain:
         for k, sy in enumerate(sylls):
             bl = "border-left:2px solid #d1d5db;" if sy["word_start"] and k > 0 else ""
             br = "border-right:3px double #b91c1c;" if sy["caesura_after"] else ""
-            h.append(f"<td style='{cell}{bl}{br}font-size:16px;color:#1f2937'>{html.escape(sy['mark'] or '')}</td>")
+            h.append(f"<td style='{cell}{bl}{br}font-size:16px;color:#1f2937'>{format_scansion_mark_html(sy['mark'] or '')}</td>")
         h.append("</tr>")
         # rangées des séries
         for s in cur["series"]:

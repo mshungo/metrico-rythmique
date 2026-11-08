@@ -2247,18 +2247,45 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
     syl_triggers = [[] for _ in range(n_all)]
     active_chains = []
 
-    # 1. 行内開子音連鎖 (Séries / Couplages de consonnes ouvrantes)
-    # ※ 定型韻律内の開子音連鎖は算入音節 (0..n_c-1) のみに限定。
-    # 韻律外の余剰女性音節 (ext_syl, index == n_c) は行内音節と連鎖せず、次行への反跳のみに参加する (Traité du rythme p. 181)。
+    # 1. 行内開子音連鎖 (Séries / Couplages de consonnes ouvrantes & Échos internes)
+    # 語末余剰女性音節 (ext_syl, 例: sirè-ne, la-ves, fau-te) の開子音は最終算入音節 (n_c - 1) の閉子音/余韻子音として行内連鎖にも参加可能とする。
+    effective_cons_map = [list(opening_map[idx]) for idx in range(n_c)]
+    if ext_syl is not None and n_c > 0:
+        for c_ext in opening_map[n_c]:
+            if c_ext not in effective_cons_map[n_c - 1]:
+                effective_cons_map[n_c - 1].append(c_ext)
+
+    # 実詞音節の閉子音 (coda) が3音節以内の他語の開子音と呼応する場合 (例: ba-salte [l] ↔ la-ves [l], trom-pe [ʁ] ↔ ver-tu [ʁ]) も連鎖候補に含める
+    for idx in range(n_c):
+        s_cur = counted[idx]
+        if s_cur["pos"] in ("NOUN", "VERB", "ADJ", "ADV", "PROPN") and s_cur.get("coda"):
+            next_is_same_fem = (
+                idx + 1 < n_c
+                and counted[idx + 1]["word_idx"] == s_cur["word_idx"]
+                and counted[idx + 1].get("is_post_tonic_fem")
+            )
+            for c_cod in s_cur["coda"]:
+                if c_cod in CONSONANTS and c_cod not in effective_cons_map[idx]:
+                    if next_is_same_fem and c_cod in effective_cons_map[idx + 1]:
+                        continue
+                    has_nearby_opening = any(
+                        abs(idx - j) <= 3
+                        and counted[j]["word_idx"] != s_cur["word_idx"]
+                        and c_cod in effective_cons_map[j]
+                        for j in range(n_c)
+                    )
+                    if has_nearby_opening:
+                        effective_cons_map[idx].append(c_cod)
+
     cons_positions = collections.defaultdict(list)
     for idx in range(n_c):
-        for c in opening_map[idx]:
+        for c in effective_cons_map[idx]:
             cons_positions[c].append(idx)
 
     # 出現順に子音系列を検証
     seen_cons_order = []
     for idx in range(n_c):
-        for c in opening_map[idx]:
+        for c in effective_cons_map[idx]:
             if c not in seen_cons_order:
                 seen_cons_order.append(c)
 
@@ -2266,11 +2293,29 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
         pos_list = cons_positions[c]
         if len(pos_list) < 2:
             continue
-        # 近接性規則 (max_step=4) で連結する局所系列へ分割
+        # 近接性規則 (max_step=4、または同一詩行内の2つの実詞強勢音節を結ぶ couplage tonique ≤ 6) で連結する局所系列へ分割
         comps = []
         cur_comp = [pos_list[0]]
         for p in pos_list[1:]:
-            if p - cur_comp[-1] <= max_step:
+            prev_p = cur_comp[-1]
+            step = p - prev_p
+            is_tonic_bridge = (
+                step <= 6
+                and counted[prev_p]["pos"] in ("NOUN", "VERB", "ADJ", "ADV", "PROPN")
+                and counted[p]["pos"] in ("NOUN", "VERB", "ADJ", "ADV", "PROPN")
+                and (
+                    (counted[prev_p]["is_word_final_masc"] and counted[p]["is_word_final_masc"])
+                    or (
+                        step <= 5
+                        and not any(
+                            ch in ".,;:!?…—–()"
+                            for k in range(prev_p, p)
+                            for ch in (counted[k].get("punct_after") or "")
+                        )
+                    )
+                )
+            )
+            if step <= max_step or is_tonic_bridge:
                 cur_comp.append(p)
             else:
                 comps.append(cur_comp)
@@ -2326,6 +2371,22 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
                 continue
 
             words_spanned = [f"s{p + 1}:{counted[p]['orth']}" for p in comp]
+            nodes = [
+                {
+                    "syl_idx": p,
+                    "syl_num": p + 1,
+                    "orth": counted[p]["orth"],
+                    "word": counted[p]["word_text"],
+                    "pos": counted[p]["pos"],
+                    "role": (
+                        "lexical"
+                        if counted[p]["pos"] in ("NOUN", "VERB", "ADJ", "ADV", "PROPN")
+                        else "cooperant"
+                    ),
+                    "is_post_tonic_fem": bool(counted[p].get("is_post_tonic_fem")),
+                }
+                for p in comp
+            ]
 
             chain_obj = {
                 "phoneme": c,
@@ -2333,14 +2394,15 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
                 "label": f"[{c}]",
                 "positions": list(comp),
                 "counted_positions": list(comp),
+                "nodes": nodes,
                 "span_desc": " ↔ ".join(words_spanned),
             }
             active_chains.append(chain_obj)
             for p in comp:
-                # 語末母音後アトーン女性音節 (e caduc post-tonique) は構造的弱音節のため強勢化させない
-                if not counted[p].get("is_post_tonic_fem"):
-                    if c not in syl_triggers[p]:
-                        syl_triggers[p].append(c)
+                # 連鎖根拠 [c] は当該音節 p に記録し、下部連結線が正確な音節位置を結べるようにする
+                # （なお語末後アトーン女性音節や語内シュワー音節を強勢化させない制御は marks 決定時に行う）
+                if c not in syl_triggers[p]:
+                    syl_triggers[p].append(c)
 
     # 2. 局所強化されたリエゾン子音 (p. 139 原則非強勢 / p. 182 cousent...des‿enfants のみ局所連鎖で活性化)
     for idx in range(n_c):
@@ -2579,8 +2641,8 @@ def _classify_meschonnic_word_accent(idx, s, v_words, counted, corn):
         # (b) ADJ1 + NOUN + ADJ2 または NOUN + même (p. 99 "mon nom même", p. 182 "leurs pauvres doigts gris") -> 二重記号 ⏓
         if (prev_tok is not None and prev_tok.pos_ == "ADJ") or nxt_low in {"même", "mêmes"}:
             return "D"
-        # (c) 不定冠詞 un/une + NOUN + 多音節評価形容詞 (p. 133-134 "un film remarquable") -> 二重記号 ⏓
-        if prev_tok is not None and normalize_french_orthography(prev_tok.text.lower()) in {"un", "une"} and len(nxt_low) >= 6:
+        # (c) 冠詞/限定詞 + NOUN + 多音節形容詞/分詞 (p. 133-134 "un film remarquable", "le mât dévêtu", "la nue accablante") -> 二重記号 ⏓
+        if prev_tok is not None and normalize_french_orthography(prev_tok.text.lower()) in {"un", "une", "le", "la", "les", "l'", "ce", "cet", "cette", "ces"} and len(nxt_low) >= 6:
             return "D"
         # (d) 通常の単一後置形容詞結合 (p. 177 "pieds plats", p. 172 "l'eau morte", "roc croulant", p. 133 "poisson rouge") -> 1リズム群に統合 (NOUNは非強勢で ⏑ˈ 受容可能)
         return None
@@ -2672,6 +2734,8 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
                 "scansion_unicode": "",
                 "syllable_tokens": [],
                 "contre_accents": [],
+                "contre_accent_runs": [],
+                "rebonds_e_caduc": [],
                 "group_volumes": [],
                 "echo_chains": [],
                 "active_chains": [],
@@ -2725,7 +2789,11 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
                 marks.append("⏓")
                 accent_origins.append("R")
                 mark_subtypes.append("D")
-            elif has_prosodic_chain and not s.get("is_post_tonic_fem"):
+            elif (
+                has_prosodic_chain
+                and not s.get("is_post_tonic_fem")
+                and not (s.get("is_schwa") and not s.get("is_word_initial"))
+            ):
                 marks.append("⏑ˈ")
                 accent_origins.append("P")
                 mark_subtypes.append("P")
@@ -2750,10 +2818,12 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
             line_syntax_conflicts += 1
 
         # 3. 反アクセント (Contre-accents: 隣接する有標音節の累積番号 1, 2, ..., L と休止跨ぎリガチャー ⁀, pp. 152-155, 165)
-        # 反アクセントは異なる語間 (trans-lexical) の強勢衝突であり、同一語内音節同士の衝突は計上しない
+        # 語間衝突 (inter-lexical) と語内プロゾディー・強勢連続 (intra-lexical) の双方に位置情報を付与して可視化可能にする
         contre_nums = [None] * n_c
         ligature_after = [False] * n_c
         line_contre_events = []
+        line_contre_runs = []
+        line_rebonds_e = []
 
         run_start = None
         for idx in range(n_c + 1):
@@ -2765,30 +2835,63 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
                 if run_start is not None:
                     run_len = idx - run_start
                     if run_len >= 2:
+                        run_positions = list(range(run_start, idx))
+                        run_words = []
+                        for pk in run_positions:
+                            wt = counted[pk]["word_text"]
+                            if not run_words or run_words[-1] != wt:
+                                run_words.append(wt)
+                        run_scope = (
+                            "inter-lexical"
+                            if len({counted[pk]["word_idx"] for pk in run_positions}) >= 2
+                            else "intra-lexical"
+                        )
                         for offset in range(run_len):
                             pos_k = run_start + offset
                             contre_nums[pos_k] = offset + 1
                             if offset < run_len - 1:
-                                if counted[pos_k]["word_idx"] == counted[pos_k + 1]["word_idx"]:
-                                    continue
+                                is_inter = counted[pos_k]["word_idx"] != counted[pos_k + 1]["word_idx"]
                                 o1 = accent_origins[pos_k]
                                 o2 = accent_origins[pos_k + 1]
                                 pair_code = f"{o1}-{o2}"
                                 if pair_code == "M-M":
                                     pair_code = "R-M"
-                                contre_type_counter[pair_code] += 1
+                                if is_inter:
+                                    contre_type_counter[pair_code] += 1
                                 has_pause_between = bool(
                                     counted[pos_k]["punct_after"]
                                     or (corn["caesura_pos"] and pos_k + 1 == corn["caesura_pos"])
                                 )
-                                if has_pause_between:
+                                if has_pause_between and is_inter:
                                     ligature_after[pos_k] = True
+                                span_str = (
+                                    f"{counted[pos_k]['word_text']} / {counted[pos_k + 1]['word_text']}"
+                                    if is_inter
+                                    else f"{counted[pos_k]['orth']}·{counted[pos_k + 1]['orth']} ({counted[pos_k]['word_text']})"
+                                )
                                 line_contre_events.append({
                                     "line": i + 1,
+                                    "pos_start": pos_k,
+                                    "pos_end": pos_k + 1,
+                                    "syl_start": pos_k + 1,
+                                    "syl_end": pos_k + 2,
                                     "type": pair_code,
-                                    "ligature": has_pause_between,
-                                    "span": f"{counted[pos_k]['word_text']} / {counted[pos_k + 1]['word_text']}",
+                                    "scope": "inter-lexical" if is_inter else "intra-lexical",
+                                    "ligature": has_pause_between and is_inter,
+                                    "span": span_str,
                                 })
+                        line_contre_runs.append({
+                            "line": i + 1,
+                            "positions": run_positions,
+                            "syllables": [pk + 1 for pk in run_positions],
+                            "origins": [accent_origins[pk] for pk in run_positions],
+                            "marks": [marks[pk] for pk in run_positions],
+                            "orths": [counted[pk]["orth"] for pk in run_positions],
+                            "words": run_words,
+                            "scope": run_scope,
+                            "type": "-".join(accent_origins[pk] for pk in run_positions),
+                            "has_ligature": any(ligature_after[pk] for pk in run_positions[:-1]),
+                        })
                         if run_len >= 3:
                             plateaux_list.append({
                                 "line": i + 1,
@@ -2796,6 +2899,29 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
                                 "words": " ".join(counted[k]["orth"] for k in range(run_start, idx)),
                             })
                     run_start = None
+
+        # 3b. 女性語末アトーン e (is_post_tonic_fem) を介した反跳カウンターアクセント (Rebond rythmique sur e caduc, pp. 155, 171-172)
+        # 例: accablan-(te) tu, Bas-(se) de, mê-(me) les, écu-(me), mais, abî-(me) vain
+        for k in range(n_c - 2):
+            if (
+                accent_origins[k] in ("R", "M", "P")
+                and counted[k + 1].get("is_post_tonic_fem")
+                and accent_origins[k + 1] == "U"
+                and accent_origins[k + 2] in ("R", "M", "P")
+            ):
+                o1 = accent_origins[k]
+                o2 = accent_origins[k + 2]
+                line_rebonds_e.append({
+                    "line": i + 1,
+                    "pos_start": k,
+                    "pos_pivot_e": k + 1,
+                    "pos_end": k + 2,
+                    "syl_start": k + 1,
+                    "syl_end": k + 3,
+                    "type": f"{o1}-(e)-{o2}",
+                    "pivot_orth": counted[k + 1]["orth"],
+                    "span": f"{counted[k]['word_text']} ({counted[k + 1]['orth']}) ↷ {counted[k + 2]['word_text']}",
+                })
 
         # 4. リズム群ごとの末音分類 ([V]# 終止母音 vs [C]# 宙吊り子音 vs [Cː]# 長化摩擦子音) と音節量輪郭
         group_volumes = []
@@ -2915,6 +3041,8 @@ def analyze_meschonnic_corpus(lines_meta, docs, unit_words, line_streams, cornul
             "scansion_unicode": "".join(unicode_parts).strip(),
             "syllable_tokens": syl_tokens,
             "contre_accents": line_contre_events,
+            "contre_accent_runs": line_contre_runs,
+            "rebonds_e_caduc": line_rebonds_e,
             "group_volumes": group_volumes,
             "echo_chains": line_echoes,
             "active_chains": active_chains,

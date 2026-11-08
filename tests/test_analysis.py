@@ -338,3 +338,18 @@ def test_mallarme_sonnet_and_dessons_meschonnic_cooperation():
     assert "l" in v14_series and "Le" in v14_series["l"]["coop_words"]
     assert "n" in v14_series and "sirène" in v14_series["n"]["words"] and "d'une" in v14_series["n"]["coop_words"]
 
+    # 3. Meschonnic スキャンション側でもカウンターアクセント (contre_accents)、e caduc 反跳 (rebonds_e_caduc)、子音系列連結が保持されること
+    mesch_lines = res["prosody_rhythm"]["meschonnic"]["lines"]
+    assert len(mesch_lines) == 14
+    # V1: la / nue のカウンターアクセント & accablante (te) ↷ tu の e caduc 反跳
+    assert any(ca["span"] == "la / nue" for ca in mesch_lines[0]["contre_accents"])
+    assert any("accablante" in rb["span"] for rb in mesch_lines[0]["rebonds_e_caduc"])
+    # V8: Abolit / le / mât の3連続強勢プラトー (R-P-R)
+    assert any(len(r["positions"]) == 3 for r in mesch_lines[7]["contre_accent_runs"])
+    # V11: l'abîme ... éployé の [l] 連鎖
+    assert any(ch["phoneme"] == "l" and len(ch["positions"]) >= 2 for ch in mesch_lines[10]["active_chains"])
+    # V14: Le / flanc のカウンターアクセントと [l], [f], [n] の3系列
+    v14_m_cons = {ch["phoneme"] for ch in mesch_lines[13]["active_chains"]}
+    assert {"l", "f", "n"} <= v14_m_cons
+
+
