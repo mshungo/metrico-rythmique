@@ -549,28 +549,34 @@ def compute_phoneme_progression_dynamics(track_records, smoothing_window=3):
         "stanza_boundaries": stanza_boundaries,
     }
 
-# ---------- 実詞軸のプロゾディー（Dessons–Meschonnic） ----------
+# ---------- リズム・プロゾディー連鎖（Dessons & Meschonnic『Traité du rythme』準拠） ----------
 LEXICAL_POS = {"NOUN", "PROPN", "VERB", "ADJ", "ADV"}
-# 意味的中心を担わない文法的副詞（否定・程度・代名副詞など）は実詞から除外する
+# 意味的中心を担わない文法的副詞（否定・程度・代名副詞など）は機能語（coopérant候補）として扱う
 GRAMMATICAL_ADVS = {
     "ne", "n'", "n", "pas", "plus", "très", "trop", "si", "aussi", "tant", "moins",
     "point", "y", "en", "là", "où", "comme", "puis", "alors", "donc", "ainsi", "assez",
-    "fort", "bien", "mieux", "même", "tout", "toute", "tous",
+    "fort", "bien", "mieux", "tout", "toute", "tous",
 }
-# 位置による重み：語頭の開子音 > 語中の開子音 > 末尾子音（Traité du rythme : 開子音の優位）
+# 単独反復（実詞の支点なし）では系列を形成しない純粋冠詞・関係代名詞
+BARE_ARTICLES_RELATIVES = {
+    "le", "la", "les", "l'", "un", "une", "des", "ce", "cet", "cette", "ces", "qui", "que", "qu'",
+}
+# 位置による重み：実詞語頭開子音 > 実詞語中開子音 / 連続リズム内で協力する機能語開子音 > 強勢母音 > 閉子音（Traité du rythme, pp. 138-144）
 PROSODIC_WEIGHTS = {
     "attaque_initiale": 3.0,
-    "attaque_interne": 2.0,
+    "attaque_interne": 2.2,
+    "attaque_cooperante": 2.0,
     "voyelle_tonique": 2.0,
+    "coda": 1.5,
     "voyelle": 1.0,
-    "coda": 1.0,
 }
 PROSODIC_KIND_FR = {
-    "attaque_initiale": "attaque initiale",
-    "attaque_interne": "attaque interne",
+    "attaque_initiale": "attaque initiale (mot plein)",
+    "attaque_interne": "attaque interne (mot plein)",
+    "attaque_cooperante": "attaque coopérante (mot outil lié)",
     "voyelle_tonique": "voyelle tonique",
     "voyelle": "voyelle atone",
-    "coda": "coda",
+    "coda": "consonne fermante (coda)",
 }
 _SERIES_EXCLUDED = {"ʔ", "ə", ""}
 
@@ -584,12 +590,22 @@ def _is_lexical_word(text, pos):
     return bool(w)
 
 
+def _has_punct_break_between(toks, k1, k2):
+    lo, hi = min(k1, k2), max(k1, k2)
+    for k in range(lo, hi):
+        pa = toks[k].get("punct_after") or ""
+        if any(ch in ".,;:!?…—–()" for ch in pa):
+            return True
+    return False
+
+
 def compute_lexical_prosodic_series(mesch_lines, rows=None):
     """
-    Dessons–Meschonnic のプロゾディー理論に従い、実詞（名詞・動詞・形容詞・副詞）の音素を軸に
-    1行内の子音・母音系列（couplage / série）を検出する。冠詞・前置詞などの機能語は系列の算定から外し、
-    「文法的中継 (relais)」として別記する。さらに詩全体で語頭開子音を共有する実詞群を
-    「系列的意味作用 (sémantique sérielle)」のパラダイムとして集約する。
+    Dessons & Meschonnic『Traité du rythme』(1998, pp. 138-146, 168-185) に従い、
+    実詞（名詞・動詞・形容詞・語彙的副詞）を軸としつつ、連続するリズム区間（同一リズム群または
+    句読点断絶のない ≤ 4 音節の近接区間）で前置詞・冠詞・代名詞・接続詞・助動詞が実詞と緊密に協力する
+    プロゾディー連鎖（couplage / série）を検出・重み付けする。
+    実詞の支点を持たない孤立した冠詞（la ... le 等）の散発的出現は系列から除外する。
     """
     rows = rows or []
     stanza_by_line = {r.get("line"): r.get("stanza", 1) for r in rows}
@@ -600,9 +616,12 @@ def compute_lexical_prosodic_series(mesch_lines, rows=None):
         line_num = m_line.get("line", li)
         toks = [t for t in m_line.get("syllable_tokens", [])]
 
-        # 1. 音節を語単位に集約（韻律語 _VerseWord の word_idx に基づく）
+        # 1. リズム群 (groupe rythmique) ID と語単位集約
         words, by_idx = [], {}
+        syl_group_ids = []
+        cur_grp = 0
         for k, t in enumerate(toks):
+            syl_group_ids.append(cur_grp)
             w_idx = t.get("word_idx")
             key = w_idx if w_idx is not None else f"x{k}"
             if key not in by_idx:
@@ -611,15 +630,19 @@ def compute_lexical_prosodic_series(mesch_lines, rows=None):
                     "text": t.get("word_text", ""),
                     "pos": t.get("word_pos", ""),
                     "syllables": [],
+                    "group_id": cur_grp,
                 }
                 by_idx[key]["lexical"] = _is_lexical_word(by_idx[key]["text"], by_idx[key]["pos"])
                 words.append(by_idx[key])
             by_idx[key]["syllables"].append(k)
+            if t.get("is_group_end"):
+                cur_grp += 1
 
-        # 2. 音素出現（位置種別・重みつき）を列挙
+        # 2. 音素出現（位置種別・リズム群つき）を列挙
         occurrences = []
         for w_order, w in enumerate(words):
             sylls = w["syllables"]
+            w_low = normalize_french_orthography(w["text"].lower())
             tonic = None
             for k in reversed(sylls):
                 if toks[k].get("nucleus") not in ("ə", "", None):
@@ -628,80 +651,204 @@ def compute_lexical_prosodic_series(mesch_lines, rows=None):
             for j, k in enumerate(sylls):
                 t = toks[k]
                 is_ext = t.get("syl_idx") is None
+                grp_id = syl_group_ids[k]
                 prev_coda = list(toks[k - 1].get("coda_cons") or []) if (is_ext and k > 0) else []
                 for c in t.get("onset_cons", []) or []:
                     if c in _SERIES_EXCLUDED:
                         continue
-                    # 余剰女性音節の開子音が直前音節の末尾子音と同一音素なら二重算入しない (tête [tɛt])
+                    # 余剰女性音節の開子音が直前音節の末尾子音と同一音素なら、二重算入せず直前の coda を attaque_interne に昇格させる (sirène [si.ʁɛ.nə])
                     if is_ext and c in prev_coda:
+                        for prev_o in reversed(occurrences):
+                            if prev_o["word_order"] == w_order and prev_o["phoneme"] == c and prev_o["kind"] == "coda":
+                                if w["lexical"]:
+                                    prev_o["kind"] = "attaque_interne"
+                                break
                         continue
-                    kind = "attaque_initiale" if j == 0 else "attaque_interne"
-                    occurrences.append({"phoneme": c, "type": "C", "kind": kind, "syl": k,
-                                        "word_order": w_order, "word": w["text"],
-                                        "lexical": w["lexical"], "ext": is_ext})
+                    if w["lexical"]:
+                        kind = "attaque_initiale" if j == 0 else "attaque_interne"
+                    else:
+                        kind = "attaque_cooperante"
+                    occurrences.append({
+                        "phoneme": c, "type": "C", "kind": kind, "syl": k, "group_id": grp_id,
+                        "word_order": w_order, "word": w["text"], "word_low": w_low, "pos": w["pos"],
+                        "lexical": w["lexical"], "ext": is_ext,
+                    })
                 nuc = t.get("nucleus")
                 if nuc and nuc not in _SERIES_EXCLUDED:
-                    kind = "voyelle_tonique" if k == tonic else "voyelle"
-                    occurrences.append({"phoneme": nuc, "type": "V", "kind": kind, "syl": k,
-                                        "word_order": w_order, "word": w["text"],
-                                        "lexical": w["lexical"], "ext": is_ext})
+                    kind = "voyelle_tonique" if (w["lexical"] and k == tonic) else "voyelle"
+                    occurrences.append({
+                        "phoneme": nuc, "type": "V", "kind": kind, "syl": k, "group_id": grp_id,
+                        "word_order": w_order, "word": w["text"], "word_low": w_low, "pos": w["pos"],
+                        "lexical": w["lexical"], "ext": is_ext,
+                    })
                 for c in t.get("coda_cons", []) or []:
                     if c in _SERIES_EXCLUDED:
                         continue
-                    occurrences.append({"phoneme": c, "type": "C", "kind": "coda", "syl": k,
-                                        "word_order": w_order, "word": w["text"],
-                                        "lexical": w["lexical"], "ext": is_ext})
+                    occurrences.append({
+                        "phoneme": c, "type": "C", "kind": "coda", "syl": k, "group_id": grp_id,
+                        "word_order": w_order, "word": w["text"], "word_low": w_low, "pos": w["pos"],
+                        "lexical": w["lexical"], "ext": is_ext,
+                    })
 
-        # 3. 実詞を軸とした系列の判定
+        # 3. Dessons & Meschonnic 規則に基づく系列・リズム内協力の判定
         by_ph = collections.defaultdict(list)
         for o in occurrences:
             by_ph[o["phoneme"]].append(o)
 
         line_series = []
         for ph, occs in by_ph.items():
+            ph_type = occs[0]["type"]
             lex = [o for o in occs if o["lexical"]]
-            lex_words = sorted({o["word_order"] for o in lex})
-            # 異なる2語以上の実詞にまたがること（同一語の反復 la mer, la mer は語彙的反復として扱う）
-            if len(lex_words) < 2 or len({o["word"].lower() for o in lex}) < 2:
-                continue
-            ph_type = lex[0]["type"]
+            tools = [o for o in occs if not o["lexical"]]
+
+            # 連続リズム区間内で実詞と協力する機能語 (mots grammaticaux coopérants) を特定
+            cooperants = []
             if ph_type == "C":
-                n_attacks = sum(1 for o in lex if o["kind"] != "coda")
-                if n_attacks < 2:
+                lex_anchors = [o for o in lex if o["kind"] != "coda"] or lex
+                for t_occ in tools:
+                    if t_occ["kind"] == "coda" and len(lex_anchors) < 2:
+                        continue
+                    # (a) 実詞と同一リズム群内、または句読点断絶のない ≤ 4 音節以内、または隣接音節 (Δ=1)
+                    is_coop = any(
+                        abs(t_occ["syl"] - lx_o["syl"]) <= 4
+                        and (
+                            t_occ["group_id"] == lx_o["group_id"]
+                            or not _has_punct_break_between(toks, t_occ["syl"], lx_o["syl"])
+                            or abs(t_occ["syl"] - lx_o["syl"]) == 1
+                        )
+                        for lx_o in lex_anchors
+                    )
+                    # (b) 同一前置詞・限定詞の並列反復 / 語内反跳 (例: de basalte et de laves, quel-que)
+                    if not is_coop and t_occ["kind"] != "coda" and t_occ["word_low"] not in BARE_ARTICLES_RELATIVES:
+                        is_coop = any(
+                            other is not t_occ
+                            and other["kind"] != "coda"
+                            and other["word_low"] == t_occ["word_low"]
+                            and abs(t_occ["syl"] - other["syl"]) <= 4
+                            for other in tools
+                        )
+                    if is_coop:
+                        cooperants.append(t_occ)
+
+            active_occs = sorted(lex + cooperants, key=lambda o: o["syl"])
+            distinct_lex_orders = sorted({o["word_order"] for o in lex})
+            distinct_lex_forms = {o["word_low"] for o in lex}
+            distinct_active_orders = sorted({o["word_order"] for o in active_occs})
+
+            if ph_type == "C":
+                n_open_lex = sum(1 for o in lex if o["kind"] != "coda")
+                n_open_active = sum(1 for o in active_occs if o["kind"] != "coda")
+                act_positions = sorted({o["syl"] for o in active_occs})
+                act_gaps = [b - a for a, b in zip(act_positions, act_positions[1:])]
+                is_compact_active = bool(act_positions) and all(g <= 4 for g in act_gaps)
+
+                # Mode 1: 異なる2語以上の実詞にまたがる系列（開子音2回以上、または開子音1回＋4音節以内の閉子音呼応）
+                mode_lex_multi = (
+                    len(distinct_lex_orders) >= 2
+                    and len(distinct_lex_forms) >= 2
+                    and (n_open_lex >= 2 or (n_open_lex >= 1 and len(lex) >= 2 and is_compact_active))
+                )
+                # Mode 2: 実詞1語 ＋ 連続リズム内で協力する機能語（両者で開子音2回以上、間隔 ≤ 4 音節）
+                mode_lex_coop = (
+                    len(distinct_lex_orders) == 1
+                    and len(cooperants) >= 1
+                    and n_open_active >= 2
+                    and is_compact_active
+                )
+                # Mode 3: 同一前置詞・限定詞の並列反復 (de ... de, quel-que)
+                mode_parallel_tool = (
+                    len(distinct_lex_orders) == 0
+                    and len(cooperants) >= 2
+                    and n_open_active >= 2
+                    and is_compact_active
+                )
+                if not (mode_lex_multi or mode_lex_coop or mode_parallel_tool):
                     continue
+                if mode_lex_multi and not is_compact_active:
+                    # 非連続の場合は実詞の開子音のみを骨格とする
+                    active_occs = sorted(lex, key=lambda o: o["syl"])
+                    cooperants = []
             else:
-                n_tonic = sum(1 for o in lex if o["kind"] == "voyelle_tonique")
-                if len(lex) < 3 and n_tonic < 2:
+                # 母音系列：異なる2語以上の実詞にまたがり、3回以上または強勢母音2回以上（例: flanc enfant [ɑ̃]）
+                if len(distinct_lex_orders) < 2 or len(distinct_lex_forms) < 2:
                     continue
-            positions = sorted({o["syl"] for o in lex})
+                n_tonic = sum(1 for o in lex if o["kind"] == "voyelle_tonique")
+                lex_pos_v = sorted({o["syl"] for o in lex})
+                v_compact = all(b - a <= 4 for a, b in zip(lex_pos_v, lex_pos_v[1:]))
+                if len(lex) < 3 and not (n_tonic >= 2 and v_compact):
+                    continue
+                active_occs = sorted(lex, key=lambda o: o["syl"])
+                cooperants = []
+
+            positions = sorted({o["syl"] for o in active_occs})
             gaps = [b - a for a, b in zip(positions, positions[1:])]
             compact = all(g <= 4 for g in gaps) if gaps else True
-            score = sum(PROSODIC_WEIGHTS[o["kind"]] for o in lex)
+            score = sum(PROSODIC_WEIGHTS[o["kind"]] for o in active_occs)
             if compact:
                 score *= 1.25  # 近接性 (proximité, ≤ 4 syllabes) による強化
-            relays = [o for o in occs if not o["lexical"] and o["kind"] != "coda"]
+
+            relays = [o for o in tools if o["kind"] != "coda"]
             lex_word_texts = []
-            seen_orders = set()
+            seen_lex_orders = set()
             for o in lex:
-                if o["word_order"] not in seen_orders:
-                    seen_orders.add(o["word_order"])
+                if o["word_order"] not in seen_lex_orders:
+                    seen_lex_orders.add(o["word_order"])
                     lex_word_texts.append(o["word"])
+
+            all_word_texts = []
+            seen_all_orders = set()
+            for o in active_occs:
+                if o["word_order"] not in seen_all_orders:
+                    seen_all_orders.add(o["word_order"])
+                    all_word_texts.append(o["word"])
+
+            coop_word_texts = []
+            seen_coop_orders = set()
+            for o in cooperants:
+                if o["word_order"] not in seen_coop_orders:
+                    seen_coop_orders.add(o["word_order"])
+                    coop_word_texts.append(o["word"])
+
+            if mode_lex_multi if ph_type == "C" else True:
+                mode_label = "coopération rythmique" if cooperants else "ancrage lexical"
+            elif mode_lex_coop:
+                mode_label = "coopération rythmique"
+            else:
+                mode_label = "parallélisme prosodique"
+
             series = {
                 "line": line_num,
                 "stanza": stanza_by_line.get(line_num, 1),
                 "phoneme": ph,
                 "type": ph_type,
-                "kind": "série" if len(lex) >= 3 else "couplage",
-                "n_occ": len(lex),
-                "n_words": len(lex_words),
-                "n_initial_attacks": sum(1 for o in lex if o["kind"] == "attaque_initiale"),
+                "kind": "série" if len(active_occs) >= 3 else "couplage",
+                "mode": mode_label,
+                "n_occ": len(active_occs),
+                "n_lex_occ": len(lex),
+                "n_coop_occ": len(cooperants),
+                "n_words": len(distinct_lex_orders) if distinct_lex_orders else len(distinct_active_orders),
+                "n_active_words": len(distinct_active_orders),
+                "n_initial_attacks": sum(1 for o in active_occs if o["kind"] in ("attaque_initiale", "attaque_cooperante")),
                 "positions": positions,
                 "max_gap": max(gaps) if gaps else 0,
                 "compact": compact,
                 "score": round(score, 2),
-                "words": lex_word_texts,
+                "words": lex_word_texts if lex_word_texts else all_word_texts,
+                "all_words": all_word_texts,
+                "coop_words": coop_word_texts,
                 "occurrences": [
-                    {"syl": o["syl"], "word": o["word"], "kind": o["kind"]} for o in lex
+                    {
+                        "syl": o["syl"],
+                        "word": o["word"],
+                        "pos": o["pos"],
+                        "kind": o["kind"],
+                        "lexical": o["lexical"],
+                    }
+                    for o in active_occs
+                ],
+                "cooperants": [
+                    {"syl": o["syl"], "word": o["word"], "pos": o["pos"], "kind": o["kind"]}
+                    for o in cooperants
                 ],
                 "relays": [{"syl": o["syl"], "word": o["word"], "kind": o["kind"]} for o in relays],
                 "text": m_line.get("text", ""),
@@ -713,22 +860,33 @@ def compute_lexical_prosodic_series(mesch_lines, rows=None):
 
         lex_syll = sum(len(w["syllables"]) for w in words if w["lexical"])
         total_score = sum(s["score"] for s in line_series)
-        density = round(total_score / max(lex_syll, 1), 2)
+        density = round(total_score / max(len(toks), 1), 2)
         for s in line_series:
             matrix.append({
-                "line": line_num, "stanza": s["stanza"], "phoneme": s["phoneme"], "type": s["type"],
-                "score": s["score"], "n_occ": s["n_occ"], "words": ", ".join(s["words"]),
+                "line": line_num,
+                "stanza": s["stanza"],
+                "phoneme": s["phoneme"],
+                "type": s["type"],
+                "mode": s["mode"],
+                "score": s["score"],
+                "n_occ": s["n_occ"],
+                "words": ", ".join(s["all_words"]),
+                "lex_words": ", ".join(s["words"]),
+                "coop_words": ", ".join(s["coop_words"]) if s["coop_words"] else "—",
             })
 
-        # 4. パラダイム（語頭開子音を共有する実詞群）
+        # 4. パラダイム（開子音を共有する実詞群＋同系列で協力する機能語）
         for w in words:
             if not w["lexical"] or not w["syllables"]:
                 continue
             first = toks[w["syllables"][0]]
             onset = [c for c in (first.get("onset_cons") or []) if c not in _SERIES_EXCLUDED]
             if onset:
-                paradigm_map[onset[0]].append({"word": w["text"], "line": line_num, "pos": w["pos"],
-                                               "attack": "".join(onset)})
+                for c_on in onset:
+                    paradigm_map[c_on].append({
+                        "word": w["text"], "line": line_num, "pos": w["pos"],
+                        "attack": "".join(onset),
+                    })
 
         lines_out.append({
             "line": line_num,
@@ -741,12 +899,17 @@ def compute_lexical_prosodic_series(mesch_lines, rows=None):
                     "lexical": by_idx.get(t.get("word_idx") if t.get("word_idx") is not None else f"x{k}", {}).get("lexical", False),
                     "word_start": bool(t.get("is_word_start")), "ext": t.get("syl_idx") is None,
                     "caesura_after": bool(t.get("caesura_after")),
+                    "group_end": bool(t.get("is_group_end")),
                 }
                 for k, t in enumerate(toks)
             ],
-            "words": [{"text": w["text"], "pos": w["pos"], "lexical": w["lexical"],
-                       "phonemes": [o["phoneme"] for o in occurrences if o["word_order"] == wi]}
-                      for wi, w in enumerate(words)],
+            "words": [
+                {
+                    "text": w["text"], "pos": w["pos"], "lexical": w["lexical"],
+                    "phonemes": [o["phoneme"] for o in occurrences if o["word_order"] == wi],
+                }
+                for wi, w in enumerate(words)
+            ],
             "series": line_series,
             "lexical_syllables": lex_syll,
             "lexical_words": sum(1 for w in words if w["lexical"]),
@@ -756,7 +919,7 @@ def compute_lexical_prosodic_series(mesch_lines, rows=None):
             "dominant": f"[{line_series[0]['phoneme']}]" if line_series else "",
         })
 
-    # 系列的意味作用：2語以上の異なる実詞が同じ語頭開子音で結ばれるパラダイム
+    # 系列的意味作用：2語以上の異なる実詞が同じ開子音で結ばれるパラダイム
     paradigms = []
     for c, items in paradigm_map.items():
         distinct = []
@@ -779,7 +942,7 @@ def compute_lexical_prosodic_series(mesch_lines, rows=None):
         })
     paradigms.sort(key=lambda p: (-len(p["co_lines"]), -p["n_words"], p["phoneme"]))
 
-    # 詩全体の主系列（実詞のみ）
+    # 詩全体の主系列（実詞および連続リズム内協力語を含むプロゾディー重み順）
     global_cnt = collections.Counter()
     for s in all_series:
         global_cnt[s["phoneme"]] += s["score"]
@@ -825,13 +988,13 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
     ipa_by_line = {lp.get("line", i): lp.get("ipa", "") for i, lp in enumerate(lines_phonetics, 1)}
     for s in (lexical_data or {}).get("series", []):
         is_c = s["type"] == "C"
-        # アリテラシオン：実詞の開子音 3 回以上（または語頭開子音 2 回以上の couplage）
-        if is_c and not (s["n_occ"] >= 3 or s["n_initial_attacks"] >= 2):
+        # アリテラシオン：開子音連鎖または3回以上の出現（連続リズム内の協力機能語を含む）
+        if is_c and not (s["n_occ"] >= 2 and (s["n_occ"] >= 3 or s["n_initial_attacks"] >= 1)):
             continue
-        if not is_c and s["n_occ"] < 3:
+        if not is_c and s["n_occ"] < 2:
             continue
         cat = "alliteration" if is_c else "assonance"
-        relay_txt = f" ; relais grammaticaux : {', '.join(r['word'] for r in s['relays'])}" if s["relays"] else ""
+        coop_txt = f" ; mots outils coopérants : {', '.join(s.get('coop_words', []))}" if s.get("coop_words") else ""
         all_patterns.append({
             "id": f"{cat}_L{s['line']}_{s['phoneme']}",
             "line": s["line"],
@@ -839,15 +1002,15 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
             "category": cat,
             "category_label": "Allitération" if is_c else "Assonance",
             "motif": f"[{s['phoneme']}]",
-            "motif_display": f"[{s['phoneme']}] × {s['n_occ']} ({s['n_words']} mots pleins)",
+            "motif_display": f"[{s['phoneme']}] × {s['n_occ']} ({s.get('mode', 'série')})",
             "count": s["n_occ"],
             "description": (
                 f"{s['kind'].capitalize()} {'consonantique' if is_c else 'vocalique'} [{s['phoneme']}] "
-                f"portée par {s['n_words']} mots pleins, écart max. {s['max_gap']} syll., "
-                f"poids prosodique {s['score']}{relay_txt}"
+                f"({s.get('mode', '')}), écart max. {s['max_gap']} syll., "
+                f"poids prosodique {s['score']}{coop_txt}"
             ),
             "words_involved": s["words"],
-            "words_str": ", ".join(s["words"]),
+            "words_str": ", ".join(s.get("all_words", s["words"])),
             "line_text": s["text"],
             "ipa_text": ipa_by_line.get(s["line"], ""),
         })
@@ -865,13 +1028,9 @@ def extract_salient_phonetic_patterns(rows, lines_phonetics, mesch_data=None, mi
                 if kind in ("serie_consonantique", "couplage"):
                     ph = ch.get("phoneme", "")
                     span_desc = ch.get("span_desc", "")
-                    # 実詞上の支点が2つ以上ある連鎖のみ採用（冠詞・前置詞だけで成立する連鎖を除外）
                     s_toks = m_line.get("syllable_tokens", [])
-                    lex_pos = [
-                        p for p in ch.get("positions", [])
-                        if p < len(s_toks) and _is_lexical_word(s_toks[p].get("word_text", ""), s_toks[p].get("word_pos", ""))
-                    ]
-                    if len({s_toks[p].get("word_idx") for p in lex_pos}) < 2:
+                    valid_positions = [p for p in ch.get("positions", []) if p < len(s_toks)]
+                    if len({s_toks[p].get("word_idx") for p in valid_positions}) < 2:
                         continue
                     pos_cnt = len(ch.get("positions", []))
                     words_in = [w.split(":")[-1] for w in span_desc.split(" ↔ ") if ":" in w]

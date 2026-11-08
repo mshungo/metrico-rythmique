@@ -179,10 +179,28 @@ def _sanitize_word_pos(word_text, raw_pos, next_word_text=None):
         "brun", "bruns", "brune", "brunes", "sourd", "sourds", "sourde", "sourdes",
         "épais", "épaisse", "vastes", "vaste", "amères", "amère", "amer", "hideux", "hideuse",
         "niais", "niaise", "tordus", "tordu", "clabaudeurs", "clabaudeur", "triomphants", "triomphant",
+        "suprême", "suprêmes", "dévêtu", "dévêtus", "dévêtue", "dévêtues", "vêtu", "vêtus", "vêtue", "vêtues",
+        "sépulcral", "sépulcrale", "sépulcraux", "furibond", "furibonde", "furibonds",
+        "éployé", "éployée", "éployés", "accablant", "accablante", "vain", "vaine", "vains",
+        "basse", "basses",
     } and raw_pos in ("ADP", "NOUN", "ADV", "PROPN", "X"):
         if raw_pos == "NOUN" and next_word_text is None and w_stem in {"noirs", "blancs", "bleus"}:
             return "ADJ"
         return "ADJ"
+    if w_stem in {"abolit", "abolis", "aboli", "abolie"} and raw_pos in ("PROPN", "NOUN", "ADP", "X"):
+        return "VERB"
+    if (
+        w_stem.endswith("ment")
+        and len(w_stem) >= 7
+        and raw_pos in ("PROPN", "ADP", "X")
+        and w_stem not in {
+            "tourment", "tourments", "clapotement", "clapotements", "élément", "éléments",
+            "moment", "moments", "serment", "serments", "jugement", "jugements",
+            "mouvement", "mouvements", "vêtement", "vêtements", "bâtiment", "bâtiments",
+            "sentiment", "sentiments", "diamant", "diamants", "firmament", "monument", "monuments",
+        }
+    ):
+        return "ADV"
     # 行頭等で ADV / NOUN と誤認された無曖昧な3人称複数動詞 -ent (例: Fermentent, Choient)
     if (
         "-" not in w_stem
@@ -301,6 +319,15 @@ def _prepare_verse_tokens(doc, fallback_ws=None):
     for idx, vw in enumerate(verse_words):
         nxt_txt = verse_words[idx + 1].text if idx + 1 < len(verse_words) else None
         vw.pos_ = _sanitize_word_pos(vw.text, vw.pos_, next_word_text=nxt_txt)
+        # 行末の "tu"（開き括弧の反送り "(tu" を除く）が形容詞・名詞・副詞・助動詞の直後に置かれる場合は過去分詞 (taire -> tu, VERB)
+        if (
+            idx == len(verse_words) - 1
+            and idx > 0
+            and normalize_french_orthography(vw.text.lower()) == "tu"
+            and "(" not in (vw.before_punct or "")
+            and verse_words[idx - 1].pos_ in ("ADJ", "NOUN", "ADV", "AUX")
+        ):
+            vw.pos_ = "VERB"
 
     return verse_words
 
@@ -2260,8 +2287,8 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
             if len(word_indices) < 2:
                 continue
 
-            # 規則2: 弱勢単音節機能語 (DET, ADP, PRON, CCONJ, SCONJ) の適正化
-            # 同一小辞の並列反復 (sans... sans...) または直近の実詞との連接でない限り、孤立小辞を強勢化しない
+            # 規則2: 弱勢単音節機能語 (DET, ADP, PRON, CCONJ, SCONJ) の連続リズム内協力 (Dessons & Meschonnic, pp. 139-141, 168-182)
+            # 同一小辞の並列反復 (de... de..., sans... sans...) または連続リズム区間内 (≤4音節・句読点断絶なし) で実詞と協力する場合に連鎖成立
             valid_comp = []
             for p in comp:
                 s = counted[p]
@@ -2269,12 +2296,31 @@ def _detect_meschonnic_line_chains(counted, ext_syl, prev_stream=None, next_stre
                 if is_tool:
                     has_adj = any(abs(p - po) <= 1 for po in comp if po != p)
                     has_same_tool = any(counted[po]["word_lower"] == s["word_lower"] for po in comp if po != p)
-                    if has_adj or has_same_tool:
+                    has_continuous_lex = any(
+                        counted[po]["pos"] not in ("DET", "ADP", "PRON", "CCONJ", "SCONJ")
+                        and abs(p - po) <= max_step
+                        and not any(
+                            ch in ".,;:!?…—–()"
+                            for k in range(min(p, po), max(p, po))
+                            for ch in (counted[k].get("punct_after") or "")
+                        )
+                        for po in comp
+                        if po != p
+                    )
+                    if has_adj or has_same_tool or has_continuous_lex:
                         valid_comp.append(p)
                 else:
                     valid_comp.append(p)
 
-            if len(valid_comp) >= 2 and len({counted[p]["word_idx"] for p in valid_comp}) >= 2:
+            has_any_lex_in_comp = any(
+                counted[p]["pos"] not in ("DET", "ADP", "PRON", "CCONJ", "SCONJ") for p in valid_comp
+            )
+            has_parallel_tool = len(valid_comp) >= 2 and len({counted[p]["word_lower"] for p in valid_comp}) < len(valid_comp)
+            if (
+                len(valid_comp) >= 2
+                and len({counted[p]["word_idx"] for p in valid_comp}) >= 2
+                and (has_any_lex_in_comp or has_parallel_tool)
+            ):
                 comp = valid_comp
             else:
                 continue

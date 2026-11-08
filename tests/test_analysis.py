@@ -284,3 +284,57 @@ Sans y penser je me trouve hors de peine."""
 
     # 空テキスト
     assert analyze("")["lexical_prosody"]["lines"] == []
+
+
+def test_mallarme_sonnet_and_dessons_meschonnic_cooperation():
+    """マラルメ『A la nue accablante tu』の8音節スキャンと、Dessons & Meschonnicのリズム的連続性における機能語協力の検証。"""
+    poem = (
+        "A la nue accablante tu\n"
+        "Basse de basalte et de laves\n"
+        "A même les échos esclaves\n"
+        "Par une trompe sans vertu\n\n"
+        "Quel sépulcral naufrage (tu\n"
+        "Le sais, écume, mais y baves)\n"
+        "Suprême une entre les épaves\n"
+        "Abolit le mât dévêtu\n\n"
+        "Ou cela que furibond faute\n"
+        "De quelque perdition haute\n"
+        "Tout l'abîme vain éployé\n\n"
+        "Dans le si blanc cheveu qui traîne\n"
+        "Avarement aura noyé\n"
+        "Le flanc enfant d'une sirène."
+    )
+    res = analyze(poem)
+
+    # 1. 全14行が8音節（octosyllabe）として正確にスキャンされること
+    rows = res["rows"]
+    assert len(rows) == 14
+    for r in rows:
+        assert r["syllables"] == 8
+
+    # 2. 全14行すべてでプロゾディー系列（実詞アンカーまたはリズム連続性における機能語協力）が検出されること
+    lx_lines = res["lexical_prosody"]["lines"]
+    assert len(lx_lines) == 14
+    for ll in lx_lines:
+        assert ll["series_count"] >= 1
+
+    # V1: "A la nue accablante tu" -> [t] (accablante, tu) & [l] (la + accablante)
+    v1_series = {s["phoneme"]: s for s in lx_lines[0]["series"]}
+    assert "t" in v1_series and set(v1_series["t"]["words"]) >= {"accablante", "tu"}
+    assert "l" in v1_series and "la" in v1_series["l"]["coop_words"]
+
+    # V2: "Basse de basalte et de laves" -> [b] (Basse, basalte), [d] (de ... de)
+    v2_series = {s["phoneme"]: s for s in lx_lines[1]["series"]}
+    assert "b" in v2_series and set(v2_series["b"]["words"]) == {"Basse", "basalte"}
+    assert "d" in v2_series and v2_series["d"]["mode"] == "parallélisme prosodique"
+
+    # V4: "Par une trompe sans vertu" -> [p] (Par + trompe)
+    v4_series = {s["phoneme"]: s for s in lx_lines[3]["series"]}
+    assert "p" in v4_series and "Par" in v4_series["p"]["coop_words"] and "trompe" in v4_series["p"]["words"]
+
+    # V14: "Le flanc enfant d'une sirène." -> [f] (flanc, enfant), [l] (Le + flanc), [n] (d'une + sirène)
+    v14_series = {s["phoneme"]: s for s in lx_lines[13]["series"]}
+    assert "f" in v14_series and set(v14_series["f"]["words"]) == {"flanc", "enfant"}
+    assert "l" in v14_series and "Le" in v14_series["l"]["coop_words"]
+    assert "n" in v14_series and "sirène" in v14_series["n"]["words"] and "d'une" in v14_series["n"]["coop_words"]
+

@@ -135,6 +135,22 @@ SAMPLE_TEXTS = {
         "Et être au haut de mon désiré heur,\n"
         "Il me remet en mon premier malheur."
     ),
+    "6. Mallarmé : À la nue accablante tu (Sonnet en octosyllabes 8v & réseaux prosodiques)": (
+        "A la nue accablante tu\n"
+        "Basse de basalte et de laves\n"
+        "A même les échos esclaves\n"
+        "Par une trompe sans vertu\n\n"
+        "Quel sépulcral naufrage (tu\n"
+        "Le sais, écume, mais y baves)\n"
+        "Suprême une entre les épaves\n"
+        "Abolit le mât dévêtu\n\n"
+        "Ou cela que furibond faute\n"
+        "De quelque perdition haute\n"
+        "Tout l'abîme vain éployé\n\n"
+        "Dans le si blanc cheveu qui traîne\n"
+        "Avarement aura noyé\n"
+        "Le flanc enfant d'une sirène."
+    ),
 }
 
 
@@ -593,16 +609,19 @@ with tab_rythme:
 # -----------------------------------------------------------------------------
 with tab_phon_chain:
     # =========================================================================
-    # Prosodie des mots pleins : chaînes consonantiques / vocaliques intra-vers
+    # Prosodie & Rythme (Dessons & Meschonnic) : séries, coopération des mots
+    # outils dans le continu rythmique, notation souscrite et carte thermique
     # =========================================================================
     lx = res.get("lexical_prosody", {}) or {}
     lx_lines = lx.get("lines", [])
-    st.subheader("Prosodie des mots pleins : séries, couplages et paradigmes sonores")
+    st.subheader("Analyse prosodique et rythmique (Dessons & Meschonnic) : séries, coopération grammaticale et paradigmes")
     st.caption(
-        "Seuls les mots pleins (noms, verbes, adjectifs, adverbes lexicaux) portent les séries. "
-        "Articles, prépositions, pronoms et auxiliaires n'entrent pas dans le calcul : ils apparaissent "
-        "en gris comme simples relais. Poids : attaque initiale 3 · attaque interne 2 · voyelle tonique 2 · "
-        "voyelle atone / coda 1 · bonus de proximité ×1,25 si chaque intervalle ≤ 4 syllabes."
+        "Selon Gérard Dessons & Henri Meschonnic (*Traité du rythme*), l'organisation prosodique s'appuie sur "
+        "des mots pleins pivots (noms, verbes, adjectifs, adverbes), mais les mots grammaticaux (prépositions, "
+        "articles, pronoms, conjonctions) **coopèrent** pleinement à la chaîne dès lors qu'ils sont liés à un mot plein "
+        "dans le **continu rythmique** (intervalle ≤ 4 syllabes sans rupture de ponctuation : ex. *la + accablante*, "
+        "*les + esclaves*, *Par + trompe*, *De + perdition*, *Le + flanc*, *d'une + sirène*) ou forment un parallélisme "
+        "prosodique (*de … de*, *quel-que*). Seuls les mots outils isolés hors continu restent en gris comme relais."
     )
 
     if lx_lines:
@@ -619,22 +638,33 @@ with tab_phon_chain:
 
         dens_vals = [ll["prosodic_density"] for ll in lx_lines]
         best_line = max(lx_lines, key=lambda ll: ll["prosodic_density"])
+        n_coop_series = sum(
+            1 for s in lx.get("series", [])
+            if s.get("mode") in ("coopération rythmique", "parallélisme prosodique") or s.get("n_coop_occ", 0) > 0
+        )
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Séries / couplages (mots pleins)", sum(ll["series_count"] for ll in lx_lines))
+        m1.metric("Séries / couplages prosodiques", sum(ll["series_count"] for ll in lx_lines),
+                  help=f"Dont {n_coop_series} séries impliquant une coopération rythmique avec des mots grammaticaux")
         m2.metric("Densité prosodique moyenne", f"{sum(dens_vals) / len(dens_vals):.2f}",
-                  help="Somme des poids des séries ÷ nombre de syllabes des mots pleins du vers")
+                  help="Somme des poids des séries (mots pleins + mots outils coopérants) ÷ syllabes actives du vers")
         m3.metric("Vers le plus dense", f"V{best_line['line']} ({best_line['prosodic_density']:.2f})")
         dom_txt = " ".join(f"[{d['phoneme']}]" for d in lx.get("dominant_series", [])[:4]) or "—"
         m4.metric("Séries dominantes", dom_txt)
 
         # ---------- 1. Notation souscrite d'un vers ----------
-        st.markdown("**Notation souscrite des séries (vers par vers)**")
+        st.markdown("**Notation souscrite des séries et de la coopération rythmique (vers par vers)**")
         line_opts = [f"V{ll['line']} — {ll['text']}" for ll in lx_lines]
         default_idx = lx_lines.index(best_line)
         sel_lbl = st.selectbox("Vers à analyser", line_opts, index=default_idx, key="lx_line_sel")
         cur = lx_lines[line_opts.index(sel_lbl)]
         sylls = cur["syllables"]
         n_s = len(sylls)
+        coop_syl_set = {
+            o["syl"]
+            for s in cur["series"]
+            for o in s["occurrences"]
+            if o.get("kind") == "attaque_cooperante"
+        }
 
         cell = "padding:4px 6px;text-align:center;white-space:nowrap;"
         h = ["<div style='overflow-x:auto'><table style='border-collapse:collapse;font-family:Georgia,serif;font-size:15px'>"]
@@ -645,6 +675,8 @@ with tab_phon_chain:
             br = "border-right:3px double #b91c1c;" if sy["caesura_after"] else ""
             if sy["lexical"]:
                 sty = "font-weight:700;color:#111827;"
+            elif k in coop_syl_set:
+                sty = "font-weight:600;color:#1e40af;border-bottom:1.5px dashed #3b82f6;"
             else:
                 sty = "color:#9ca3af;font-style:italic;"
             if sy["ext"]:
@@ -656,7 +688,7 @@ with tab_phon_chain:
         for k, sy in enumerate(sylls):
             bl = "border-left:2px solid #d1d5db;" if sy["word_start"] and k > 0 else ""
             br = "border-right:3px double #b91c1c;" if sy["caesura_after"] else ""
-            col = "#374151" if sy["lexical"] else "#c4c8cf"
+            col = "#374151" if (sy["lexical"] or k in coop_syl_set) else "#c4c8cf"
             h.append(f"<td style='{cell}{bl}{br}font-family:monospace;font-size:13px;color:{col}'>{html.escape(sy['ipa'])}</td>")
         h.append("</tr>")
         # rangée des accents
@@ -672,10 +704,13 @@ with tab_phon_chain:
             occ_map = {}
             for o in s["occurrences"]:
                 occ_map.setdefault(o["syl"], o["kind"])
-            relay_set = {r["syl"] for r in s["relays"]}
+            relay_set = {r["syl"] for r in s["relays"] if r["syl"] not in occ_map}
             first, last = min(s["positions"]), max(s["positions"])
+            mode_short = "coop." if s.get("mode") == "coopération rythmique" else (
+                "parall." if s.get("mode") == "parallélisme prosodique" else s["kind"]
+            )
             lbl = (f"<b style='color:{colr}'>[{html.escape(s['phoneme'])}]</b> "
-                   f"<span style='font-size:11px;color:#6b7280'>{s['kind']} · {s['score']}</span>")
+                   f"<span style='font-size:11px;color:#6b7280'>{mode_short} · {s['score']}</span>")
             h.append(f"<tr><td style='{cell}text-align:right'>{lbl}</td>")
             for k in range(n_s):
                 bl = "border-left:2px solid #d1d5db;" if sylls[k]["word_start"] and k > 0 else ""
@@ -683,14 +718,21 @@ with tab_phon_chain:
                            if first <= k <= last else "")
                 if k in occ_map:
                     kind = occ_map[k]
-                    size = "22px" if kind == "attaque_initiale" else "18px"
-                    inner = (f"<span style='display:inline-block;min-width:{size};height:{size};line-height:{size};"
-                             f"border-radius:50%;background:{colr};color:white;font-size:12px;font-family:monospace' "
-                             f"title='{html.escape(sylls[k]['word'])} · {kind}'>{html.escape(s['phoneme'])}</span>")
+                    if kind == "attaque_cooperante":
+                        inner = (f"<span style='display:inline-block;min-width:20px;height:20px;line-height:16px;"
+                                 f"border-radius:50%;border:2.5px solid {colr};background:#ffffff;color:{colr};"
+                                 f"font-weight:700;font-size:11px;font-family:monospace' "
+                                 f"title='mot grammatical coopérant dans le continu rythmique : {html.escape(sylls[k]['word'])}'>"
+                                 f"{html.escape(s['phoneme'])}</span>")
+                    else:
+                        size = "22px" if kind == "attaque_initiale" else "18px"
+                        inner = (f"<span style='display:inline-block;min-width:{size};height:{size};line-height:{size};"
+                                 f"border-radius:50%;background:{colr};color:white;font-size:12px;font-family:monospace' "
+                                 f"title='mot plein : {html.escape(sylls[k]['word'])} · {kind}'>{html.escape(s['phoneme'])}</span>")
                 elif k in relay_set:
                     inner = (f"<span style='display:inline-block;min-width:18px;height:18px;line-height:16px;"
                              f"border-radius:50%;border:1.5px dashed #9ca3af;color:#9ca3af;background:white;font-size:11px;"
-                             f"font-family:monospace' title='relais grammatical : {html.escape(sylls[k]['word'])}'>"
+                             f"font-family:monospace' title='relais grammatical hors continu : {html.escape(sylls[k]['word'])}'>"
                              f"{html.escape(s['phoneme'])}</span>")
                 else:
                     inner = ""
@@ -699,26 +741,28 @@ with tab_phon_chain:
         h.append("</table></div>")
         st.markdown("".join(h), unsafe_allow_html=True)
         if not cur["series"]:
-            st.info("Aucune série portée par au moins deux mots pleins distincts dans ce vers.")
+            st.info("Aucune série prosodique détectée dans ce vers.")
         else:
-            st.caption("● plein : occurrence dans un mot plein (grand = attaque initiale) · ○ pointillé : relais grammatical "
-                       "(non compté) · barre colorée : empan de la série · ‖ rouge : césure.")
+            st.caption("● plein : mot plein pivot (grand = attaque initiale) · ◉ cercle bicolore : mot grammatical "
+                       "**coopérant dans le continu rythmique** (inclus dans l'empan et le poids) · ○ pointillé gris : "
+                       "relais hors continu · barre colorée : empan rythmique continu · ‖ rouge : césure.")
             sd_rows = [{
                 "Série": f"[{s['phoneme']}]",
                 "Type": "consonne" if s["type"] == "C" else "voyelle",
-                "Statut": s["kind"],
-                "Mots pleins": " · ".join(s["words"]),
+                "Mode rythmique": s.get("mode", "ancrage lexical"),
+                "Chaîne complète": " · ".join(s.get("all_words", s["words"])),
+                "Mots pleins pivots": " · ".join(s["words"]) or "—",
+                "Mots outils coopérants": " · ".join(s.get("coop_words", [])) or "—",
                 "Occ.": s["n_occ"],
-                "Attaques initiales": s["n_initial_attacks"],
                 "Écart max (syll.)": s["max_gap"],
-                "Proximité ≤ 4": "oui" if s["compact"] else "non",
+                "Continu ≤ 4": "oui" if s["compact"] else "non",
                 "Poids": s["score"],
-                "Relais grammaticaux": ", ".join(r["word"] for r in s["relays"]) or "—",
             } for s in cur["series"]]
             st.dataframe(pd.DataFrame(sd_rows), width="stretch", hide_index=True)
 
         # ---------- 2. Vue d'ensemble du poème ----------
-        with st.expander("Vue d'ensemble : mots pleins colorés par série dominante", expanded=True):
+        with st.expander("Vue d'ensemble : mots pleins pivots et mots grammaticaux coopérants par vers", expanded=True):
+            st.caption("Soulignement plein gras : **mot plein pivot** · Soulignement tireté : **mot grammatical coopérant** dans le continu rythmique.")
             ov = ["<div style='font-family:Georgia,serif;font-size:15px;line-height:1.9'>"]
             prev_st = None
             for ll in lx_lines:
@@ -726,18 +770,25 @@ with tab_phon_chain:
                     ov.append("<div style='height:10px'></div>")
                 prev_st = ll["stanza"]
                 word_color = {}
-                for s in ll["series"][:3]:
+                coop_word_color = {}
+                for s in ll["series"][:4]:
                     for w in s["words"]:
                         word_color.setdefault(w, (s["phoneme"], lx_color(s["phoneme"])))
+                    for cw in s.get("coop_words", []):
+                        coop_word_color.setdefault(cw, (s["phoneme"], lx_color(s["phoneme"])))
                 parts = []
                 for w in ll["words"]:
                     t = html.escape(w["text"])
-                    if not w["lexical"]:
-                        parts.append(f"<span style='color:#b0b5bd'>{t}</span>")
-                    elif w["text"] in word_color:
+                    if w["lexical"] and w["text"] in word_color:
                         ph, c = word_color[w["text"]]
                         parts.append(f"<span style='color:{c};font-weight:700;border-bottom:2px solid {c}' "
-                                     f"title='série [{html.escape(ph)}]'>{t}</span>")
+                                     f"title='mot plein pivot · série [{html.escape(ph)}]'>{t}</span>")
+                    elif not w["lexical"] and w["text"] in coop_word_color:
+                        ph, c = coop_word_color[w["text"]]
+                        parts.append(f"<span style='color:{c};font-weight:600;border-bottom:2px dashed {c}' "
+                                     f"title='mot grammatical coopérant dans le continu rythmique · série [{html.escape(ph)}]'>{t}</span>")
+                    elif not w["lexical"]:
+                        parts.append(f"<span style='color:#b0b5bd'>{t}</span>")
                     else:
                         parts.append(f"<span style='color:#111827'>{t}</span>")
                 badges = " ".join(
@@ -757,19 +808,32 @@ with tab_phon_chain:
         mx = pd.DataFrame(lx.get("matrix", []))
         g1, g2 = st.columns([3, 2])
         with g1:
-            st.markdown("**Carte vers × phonème (poids des séries portées par les mots pleins)**")
+            st.markdown("**Carte thermique vers × phonème (Dessons & Meschonnic : pivots lexicaux & coopération rythmique)**")
             if not mx.empty:
                 mx["vers"] = mx["line"]
                 mx["phonème"] = "[" + mx["phoneme"] + "]"
+                if "mode" not in mx.columns:
+                    mx["mode"] = "ancrage lexical"
+                if "lex_words" not in mx.columns:
+                    mx["lex_words"] = mx["words"]
+                if "coop_words" not in mx.columns:
+                    mx["coop_words"] = ""
                 order_ph = ["[" + d["phoneme"] + "]" for d in lx.get("dominant_series", [])]
                 order_ph += [p for p in mx["phonème"].unique() if p not in order_ph]
                 heat = alt.Chart(mx).mark_rect(stroke="white", strokeWidth=1).encode(
                     x=alt.X("vers:O", title="Vers"),
                     y=alt.Y("phonème:N", sort=order_ph, title=None),
                     color=alt.Color("score:Q", scale=alt.Scale(scheme="orangered"), title="Poids"),
-                    tooltip=[alt.Tooltip("vers:O", title="Vers"), alt.Tooltip("phonème:N"),
-                             alt.Tooltip("score:Q", title="Poids"), alt.Tooltip("n_occ:Q", title="Occ."),
-                             alt.Tooltip("words:N", title="Mots pleins")],
+                    tooltip=[
+                        alt.Tooltip("vers:O", title="Vers"),
+                        alt.Tooltip("phonème:N", title="Série"),
+                        alt.Tooltip("mode:N", title="Mode rythmique"),
+                        alt.Tooltip("score:Q", title="Poids"),
+                        alt.Tooltip("n_occ:Q", title="Occurrences"),
+                        alt.Tooltip("words:N", title="Chaîne complète"),
+                        alt.Tooltip("lex_words:N", title="Mots pleins pivots"),
+                        alt.Tooltip("coop_words:N", title="Mots outils coopérants"),
+                    ],
                 ).properties(height=max(160, 22 * len(order_ph)))
                 st.altair_chart(heat, width="stretch")
             else:
@@ -805,13 +869,17 @@ with tab_phon_chain:
 
         lx_csv = pd.DataFrame([{
             "vers": s["line"], "strophe": s["stanza"], "série": s["phoneme"], "type": s["type"], "statut": s["kind"],
-            "mots_pleins": " | ".join(s["words"]), "occurrences": s["n_occ"], "attaques_initiales": s["n_initial_attacks"],
+            "mode_rythmique": s.get("mode", "ancrage lexical"),
+            "chaine_complete": " | ".join(s.get("all_words", s["words"])),
+            "mots_pleins": " | ".join(s["words"]),
+            "mots_outils_cooperants": " | ".join(s.get("coop_words", [])),
+            "occurrences": s["n_occ"], "attaques_initiales": s["n_initial_attacks"],
             "ecart_max": s["max_gap"], "proximite": s["compact"], "poids": s["score"],
             "relais": " | ".join(r["word"] for r in s["relays"]), "texte": s["text"],
         } for s in lx.get("series", [])])
         if not lx_csv.empty:
-            st.download_button("📥 Exporter les séries des mots pleins (CSV)", lx_csv.to_csv(index=False).encode("utf-8"),
-                               file_name="series_mots_pleins.csv", mime="text/csv", key="dl_lx_csv")
+            st.download_button("📥 Exporter les séries prosodiques (CSV)", lx_csv.to_csv(index=False).encode("utf-8"),
+                               file_name="series_prosodiques_dessons_meschonnic.csv", mime="text/csv", key="dl_lx_csv")
 
     st.divider()
     st.subheader("Chaînes phonématiques & Recherche d'occurrences IPA")
